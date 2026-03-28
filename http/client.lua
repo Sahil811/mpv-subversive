@@ -30,8 +30,14 @@ local HTTPClient = {
 }
 local ok, carrier = pcall(require, "http.socket")
 if not ok then
-    local result_code = os.execute("curl --version 2>&1 1>/dev/null")
-    assert(result_code == 0, "curl command was not found! Unable to initialize")
+    local found = os.execute("curl.exe --version >nul 2>&1")
+    if not found or found == 1 or found == false then
+        found = os.execute("curl --version >nul 2>&1")
+    end
+    if not (found == 0 or found == true) then
+        found = os.execute("curl --version 2>&1 1>/dev/null")
+    end
+    assert(found == 0 or found == true, "curl command was not found! Unable to initialize")
     carrier = require("http.curl")
 end
 

@@ -28,7 +28,7 @@ local backend
 
 local function main()
     backend = require("backend.backend"):new(OPTS)
-    mp.add_key_binding("b", "find_sub", function() loader:run(backend) end)
+    mp.add_key_binding("q", "find_sub", function() loader:run(backend) end)
 end
 
 if OPTS.enabled then

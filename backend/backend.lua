@@ -100,9 +100,7 @@ end
 ---@param show_info table containing title, ep_number and anilist_data
 ---@return string path,table files extracted cache path and table with the actual files
 function backend:extract_archive(file, show_info)
-    local tmp_path = os.tmpname()
-    os.remove(tmp_path)
-    os.execute(("mkdir -p %q"):format(tmp_path))
+    local tmp_path = util.get_temporary_path()
 
     local function extract_inner_archive(path_to_archive)
         print(string.format("Looking for archive files in: %q", path_to_archive))
@@ -121,25 +119,31 @@ function backend:extract_archive(file, show_info)
     end
     extract_inner_archive(file)
 
-    os.execute(string.format("cp %q %q", file, tmp_path))
+    -- Copy the original file to tmp_path as well if it's an archive we can extract from
+    -- On Windows we can use mp.command_native or just Lua's io.open/write for small files, but here we'll use a system command
+    local cp_cmd = util.is_windows() and "copy" or "cp"
+    os.execute(string.format("%s %q %q >nul 2>&1", cp_cmd, file, tmp_path))
+
     print(string.format("Extracting matches to: %q", tmp_path))
-    Sequence(util.run_cmd(string.format("ls %q/*.{rar,zip,7z} 2>/dev/null", tmp_path)))
-        :foreach(function(full_path)
+    local inner_files = mpu.readdir(tmp_path) or {}
+    for _, f in ipairs(inner_files) do
+        local full_path = tmp_path .. '/' .. f
+        if self:is_supported_archive(f) then
             local parser = archive:new(full_path)
-            if not parser:check_valid() then
-                os.remove(full_path)
-                return
-            end
-            -- TODO what if we get multiple archives with filenames that overwrite each other?
-            for f in parser:list_files{} do
-                print(("Listing file from %s: %s"):format(full_path, f))
-                parser:extract { filter = { f }, target_path = tmp_path }
+            if parser:check_valid() then
+                for sub_f in parser:list_files {} do
+                    print(("Listing file from %s: %s"):format(full_path, sub_f))
+                    parser:extract { filter = { sub_f }, target_path = tmp_path }
+                end
             end
             os.remove(full_path)
-        end)
+        end
+    end
+
     local cached_path = self:get_cached_path(show_info)
     local files = {}
-    for _,f in ipairs(util.run_cmd(("ls %q"):format(tmp_path))) do
+    local final_files = mpu.readdir(tmp_path) or {}
+    for _, f in ipairs(final_files) do
         if util.path_exists(tmp_path .. '/' .. f) then
             table.insert(files, {
                 name = f,
@@ -149,9 +153,16 @@ function backend:extract_archive(file, show_info)
             })
         end
     end
-    os.execute(string.format("mkdir -p %q", cached_path))
-    os.execute(("cp %q/* %q"):format(tmp_path, cached_path))
-    os.execute(("rm -r %q"):format(tmp_path))
+
+    if util.is_windows() then
+        os.execute(string.format("mkdir %q >nul 2>&1", cached_path))
+        os.execute(string.format("xcopy /Y /Q %q %q >nul 2>&1", tmp_path .. "\\*", cached_path))
+        os.execute(string.format("rd /S /Q %q >nul 2>&1", tmp_path))
+    else
+        os.execute(string.format("mkdir -p %q", cached_path))
+        os.execute(("cp %q/* %q"):format(tmp_path, cached_path))
+        os.execute(("rm -r %q"):format(tmp_path))
+    end
     return cached_path, files
 end
 
@@ -181,6 +192,8 @@ function backend.extract_title_and_number(text)
     local matchers = Sequence {
         Regex("^([%a%s%p%d]+)[Ss][%d]+[Ee]?([%d]+)", "\1\2"),
         Regex("^([%a%s%p%d]+)%-[%s]-([%d]+)[%s%p]*[^%a]*", "\1\2"),
+        Regex("^([%a%s%p]+)[%s]+(%d+)$", "\1\2"),
+        Regex("^([%a%s%p]+)[%s]+(%d+)[%s]*.*$", "\1\2"),
         Regex("^([%a%s%p%d]+)[Ee]?[Pp]?[%s]+(%d+)$", "\1\2"),
         Regex("^([%a%s%p%d]+)[%s](%d+).*$", "\1\2"),
         Regex("^([%d]+)[%s]*(.+)$", "\2\1") }

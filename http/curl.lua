@@ -38,7 +38,7 @@ function CURL:build_curl_cmd(request, method)
         for _, arg in ipairs({ ... }) do table.insert(curl_args, arg) end
     end
     local function add_header(k, v) add_args("--header", ("%s: %s"):format(k, v)) end
-    add_args("curl", "-i", "--http1.1", "--raw")
+    add_args("curl.exe", "-i", "--http1.1", "--raw")
     add_args("-X", (assert(method, "Missing method! Expected GET or POST")))
     if method == "POST" then
         add_args("--data", (assert(request.body, "Missing data for POST request")))

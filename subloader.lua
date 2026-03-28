@@ -49,12 +49,26 @@ function show_selector:build_manual_lookup_console()
         prompt = "Please type the name of the show: ",
         opened = log_help,
         submit = function(selected_show)
-            if not matching_shows[selected_show] then
-                mpi.log_error("No show was selected!")
+            local anilist_data = matching_shows[selected_show]
+            if not anilist_data then
+                -- if no exact match found, try to find a match where the title is contained in the input or vice versa
+                local search_term = selected_show:lower()
+                for _, media in ipairs(matching_shows) do
+                    local title_romaji = (media.title and media.title.romaji or ""):lower()
+                    local title_english = (media.title and media.title.english or ""):lower()
+                    if title_romaji == search_term or title_english == search_term or
+                        search_term:find(title_romaji, 1, true) or title_romaji:find(search_term, 1, true) then
+                        anilist_data = media
+                        break
+                    end
+                end
+            end
+
+            if not anilist_data then
+                mpi.log_error("No show was selected and no matching title found!")
                 return log_help()
             end
             mpi.terminate()
-            local anilist_data = matching_shows[selected_show]
             self.show_list = { anilist_data }
             self.show_info.anilist_data = anilist_data
             self.show_info.parsed_title = anilist_data.title and anilist_data.title.romaji or self.show_info
@@ -258,8 +272,9 @@ function sub_selector:select_item(menu_item)
     if menu_item.parent.last_selected then
         mp.commandv("sub_remove", menu_item.parent.last_selected)
     end
-    mp.commandv("sub_add", menu_item.subtitle.absolute_path, 'cached', 'autoloader', 'jp')
+    mp.commandv("sub_add", menu_item.subtitle.absolute_path, 'cached')
     menu_item.parent.last_selected = mp.get_property('sid')
+    mp.commandv("set", "sid", menu_item.parent.last_selected)
 end
 
 function sub_selector:choose_item(menu_item)
@@ -273,9 +288,14 @@ function sub_selector:choose_item(menu_item)
         if sub_path:sub(1, 1) == '.' then -- relative path
             sub_path = dir .. '/' .. sub_path .. '/'
         end
-        os.execute(("mkdir -p %q"):format(sub_path))
+        if util.is_windows() then
+            os.execute(string.format("mkdir %q >nul 2>&1", sub_path))
+        else
+            os.execute(("mkdir -p %q"):format(sub_path))
+        end
         local sub_fn = table.concat({ sub_path, fn:gsub("[^.]+$", ""), util.get_extension(menu_item.subtitle.name) })
-        os.execute(("cp %q %q"):format(menu_item.subtitle.absolute_path, sub_fn))
+        local cp_cmd = util.is_windows() and "copy" or "cp"
+        os.execute(string.format("%s %q %q >nul 2>&1", cp_cmd, menu_item.subtitle.absolute_path, sub_fn))
     end
 end
 

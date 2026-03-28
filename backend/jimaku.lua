@@ -32,8 +32,13 @@ function jimaku:query_subtitles(show_info)
     end
     local entries, err = mpu.parse_json(response.data)
     assert(entries, err)
+    local util = require 'utils.utils'
     local cached_path = self:get_cached_path(show_info)
-    os.execute(string.format("mkdir -p %q", cached_path))
+    if util.is_windows() then
+        os.execute(string.format("mkdir %q >nul 2>&1", cached_path))
+    else
+        os.execute(string.format("mkdir -p %q", cached_path))
+    end
 
     local items = {}
     for _, entry in ipairs(entries) do
