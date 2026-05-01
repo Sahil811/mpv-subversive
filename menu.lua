@@ -63,7 +63,10 @@ function MenuItem:draw_text(display_idx)
     self:pos(self.parent.pos_x + self.parent.padding, self.parent.pos_y + (self.height * (display_idx - 1)) + self.parent.padding)
     self:set_font_size()
     self:apply_text_color()
-    self:append(self.display_text)
+    -- UX: prefix selected selectable items with ► for clear visual indicator
+    -- Use self:is_selectable() with colon — self.is_selectable() would pass no args and crash
+    local prefix = (self.is_selected and self:is_selectable()) and "► " or "  "
+    self:append(prefix .. self.display_text)
 end
 
 function MenuItem:set_font_size(size)
@@ -108,11 +111,11 @@ function Menu:set_header(header_text)
     self.header = MenuItem:new {
         is_enabled = false,
         is_visible = true,
-        display_text = header_text,
+        display_text = "▌ " .. header_text,  -- UX: visual prefix for header
         text_color = '95bdc7',
         font_size = 27
     }
-    self.header.parent  = self
+    self.header.parent = self
 end
 
 function Menu:new_item(item_opts)
@@ -171,10 +174,10 @@ function Menu:get_visible_items()
 
     local non_item_size, visible_idx = #displayed_items, 0
     for _,item in ipairs(self.choices) do
-        -- when we're selecting an option item the `is_within_window` call does not work
         if item.is_visible then
             visible_idx = visible_idx + 1
-            if(self.selected <= #self.options or is_within_window(visible_idx)) then
+            -- Bug 20 fix: correct window centering; window shows items within visible_item_count of selected
+            if (self.selected <= #self.options) or math.abs(visible_idx - visible_selected_idx) < self.visible_item_count then
                 table.insert(displayed_items, item)
             end
         end
@@ -264,7 +267,8 @@ end
 
 function Menu:close()
     for _, val in pairs(self:get_keybindings()) do
-        mp.remove_key_binding(val.key, val.key, val.fn)
+        -- Bug 18 fix: mp.remove_key_binding only accepts the binding name, not extra args
+        mp.remove_key_binding(val.key)
     end
     for _, callback in ipairs(self.on_close_callbacks) do
         callback(self)

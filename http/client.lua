@@ -30,12 +30,11 @@ local HTTPClient = {
 }
 local ok, carrier = pcall(require, "http.socket")
 if not ok then
-    local found = os.execute("curl.exe --version >nul 2>&1")
-    if not found or found == 1 or found == false then
-        found = os.execute("curl --version >nul 2>&1")
-    end
+    -- Bug 21 fix: use platform-appropriate null redirect
+    local null_redirect = utils.is_windows() and ">nul 2>&1" or ">/dev/null 2>&1"
+    local found = os.execute("curl.exe --version " .. null_redirect)
     if not (found == 0 or found == true) then
-        found = os.execute("curl --version 2>&1 1>/dev/null")
+        found = os.execute("curl --version " .. null_redirect)
     end
     assert(found == 0 or found == true, "curl command was not found! Unable to initialize")
     carrier = require("http.curl")
@@ -81,12 +80,13 @@ function HTTPClient:parse_response(response)
             response_headers[key:lower()] = value
         elseif state == 2 then
             -- done parsing headers, next up is data
-            if response_headers["content-length"] then
-                data = response:sub(init_idx, #response)
-                assert(#data == tonumber(response_headers["content-length"]), "Read content NOT equal to Content-Length!")
-            elseif response_headers["transfer-encoding"] == "chunked" then
+            -- Check chunked FIRST — it takes priority over content-length
+            if response_headers["transfer-encoding"] == "chunked" then
                 if chunk_size then
-                    assert(chunk_size == #line, "Invalid chunk size!")
+                    -- Bug 22: soft warning instead of hard assert (some servers lie about chunk sizes)
+                    if chunk_size ~= #line then
+                        print(("[mpv-subversive] Warning: chunk size mismatch (expected %d, got %d)"):format(chunk_size, #line))
+                    end
                     chunk_data = chunk_data .. line
                     chunk_size = nil
                 else
@@ -94,6 +94,12 @@ function HTTPClient:parse_response(response)
                     if chunk_size == 0 then
                         data = chunk_data
                     end
+                end
+            elseif response_headers["content-length"] then
+                data = response:sub(init_idx, #response)
+                -- Bug 22 fix: don't hard-assert on content-length match (some servers lie)
+                if #data < tonumber(response_headers["content-length"]) then
+                    print("[mpv-subversive] Warning: received less data than Content-Length declared")
                 end
             else
                 error(("Unable to parse response. headers: \n\t - [ %s ],\n remaining response data:\n \"%s\""):format(

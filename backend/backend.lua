@@ -40,13 +40,37 @@ function backend:is_supported_archive(filename)
 end
 
 function backend:is_matching_episode(show_info, filename)
-    if not show_info.ep_number then
+    if not show_info.ep_number or show_info.ep_number <= 0 then
         return true
     end
+    
     local sanitized_filename = self.sanitize(filename)
-    local zero_padded_ep_number = ("%%0%dd"):format(#tostring(show_info.anilist_data.episodes or "00")):format(show_info.ep_number)
-    local match = sanitized_filename:match(zero_padded_ep_number)
-    return match ~= nil
+    local ep_num = show_info.ep_number
+    
+    -- Build patterns. Use episodes count only when it's actually available.
+    local total_episodes = (show_info.anilist_data and show_info.anilist_data.episodes) or nil
+    local pad_width = total_episodes and #tostring(total_episodes) or 2
+    local patterns = {
+        -- Zero-padded based on total episodes (e.g. 01, 001)
+        string.format("%0" .. pad_width .. "d", ep_num),
+        -- Common patterns: E01, EP01, Episode 01, etc.
+        "[Ee][Pp]?%s*0*" .. ep_num,
+        -- Dash or space followed by number: - 01, -01
+        "[%s%-]0*" .. ep_num,
+        -- Just the number with word boundaries
+        "[^%d]0*" .. ep_num .. "[^%d]",
+        -- At start or end
+        "^0*" .. ep_num .. "[^%d]",
+        "[^%d]0*" .. ep_num .. "$",
+    }
+    
+    for _, pattern in ipairs(patterns) do
+        if sanitized_filename:match(pattern) then
+            return true
+        end
+    end
+    
+    return false
 end
 
 ---Use AniList's search API to query the show name (parsed from the filename)
@@ -71,20 +95,43 @@ function backend:query_shows(show_info)
             }
         }
     ]]
+    
     local body_json = mpu.format_json({
         query = graphql_query,
         variables = {
             search = show_info.parsed_title
         }
     })
+    
     local response = HTTPClient:POST {
         url = "https://graphql.anilist.co",
         headers = {
-            ["Content-Type"] = "application/json"
+            ["Content-Type"] = "application/json",
+            ["Accept"] = "application/json"
         },
         body = body_json
     }
-    return assert(mpu.parse_json(response.data), ("Could not parse anilist response: %s"):format(response.data)).data.Page.media
+    
+    if response.status_code ~= 200 then
+        if self.show_notifications then
+            mp.osd_message(("AniList API error: HTTP %d"):format(response.status_code), 3)
+        end
+        print(("AniList API error [%d]: %s"):format(response.status_code, response.data or "Unknown error"))
+        return {}
+    end
+    
+    local parsed, err = mpu.parse_json(response.data)
+    if not parsed then
+        print(("Failed to parse AniList response: %s"):format(err or "Invalid JSON"))
+        return {}
+    end
+    
+    if not parsed.data or not parsed.data.Page or not parsed.data.Page.media then
+        print("Unexpected AniList response structure")
+        return {}
+    end
+    
+    return parsed.data.Page.media
 end
 
 ---Extract all subtitles which are available for the given ID
@@ -154,14 +201,28 @@ function backend:extract_archive(file, show_info)
         end
     end
 
+    -- Bug 15 fix: cross-platform move using Lua IO instead of os.execute with %q
     if util.is_windows() then
-        os.execute(string.format("mkdir %q >nul 2>&1", cached_path))
-        os.execute(string.format("xcopy /Y /Q %q %q >nul 2>&1", tmp_path .. "\\*", cached_path))
-        os.execute(string.format("rd /S /Q %q >nul 2>&1", tmp_path))
+        os.execute(string.format("mkdir \"%s\" >nul 2>&1", cached_path:gsub("/", "\\\\")))
     else
         os.execute(string.format("mkdir -p %q", cached_path))
-        os.execute(("cp %q/* %q"):format(tmp_path, cached_path))
-        os.execute(("rm -r %q"):format(tmp_path))
+    end
+    -- Copy each file individually using Lua IO for reliability
+    for _, f in ipairs(final_files) do
+        local src = tmp_path .. '/' .. f
+        local dst = cached_path .. '/' .. f
+        util.open_file(src, 'rb', function(fin)
+            local data = fin:read("*a")
+            util.open_file(dst, 'wb', function(fout)
+                fout:write(data)
+            end)
+        end)
+    end
+    -- Clean up temp directory
+    if util.is_windows() then
+        os.execute(string.format("rd /S /Q \"%s\" >nul 2>&1", tmp_path:gsub("/", "\\\\")))
+    else
+        os.execute(string.format("rm -rf %q", tmp_path))
     end
     return cached_path, files
 end
@@ -173,30 +234,40 @@ end
 function backend.sanitize(text)
     local sub_patterns = {
         "%.[%a]+$", -- extension
-        "_", "%.",
-        "%[[^%]]+%]", -- [] bracket
-        "%([^%)]+%)", -- () bracket
-        "720[pP]", "480[pP]", "1080[pP]", "[xX]26[45]", "[bB]lu[-]?[rR]ay", "^[%s]*", "[%s]*$",
-        "1920x1080", "1920X1080", "Hi10P", "FLAC", "AAC"
+        "%[[^%]]+%]", -- [] bracket - remove these
+        "%{[^%}]+%}", -- {} bracket - remove these
+        "720[pP]", "480[pP]", "1080[pP]", "2160[pP]", "4[kK]",
+        "[xXhH]26[45]", "[xXhH]265", "HEVC", "AVC",
+        "[bB]lu[-]?[rR]ay", "[bB][dD][rR]ip", "[dD][vV][dD][rR]ip",
+        "[wW][eE][bB][-]?[rR]ip", "[wW][eE][bB][-]?[dD][lL]",
+        "10[bB]it", "8[bB]it", "Hi10P?",
+        "FLAC", "AAC", "MP3", "DTS", "AC3",
+        "[mM]ulti", "[dD]ual",
+        "1920x1080", "1280x720", "[0-9]+x[0-9]+",
     }
     local result = text
-    for _,sub_pattern in ipairs(sub_patterns) do
-        local new = result:gsub(sub_pattern, "")
-        if #new > 0 then result = new end
+    for _, sub_pattern in ipairs(sub_patterns) do
+        result = result:gsub(sub_pattern, " ")
     end
+    -- Replace () parentheses with spaces but keep the content
+    result = result:gsub("[%(%)]" , " ")
+    -- Replace underscores and dots with spaces AFTER removing brackets
+    result = result:gsub("_", " "):gsub("%.", " ")
+    -- Collapse multiple spaces and trim
+    result = result:gsub("%s+", " "):gsub("^%s+", ""):gsub("%s+$", "")
     return result
 end
 
 ---@return string,number|nil: show's title and episode number
 function backend.extract_title_and_number(text)
     local matchers = Sequence {
-        Regex("^([%a%s%p%d]+)[Ss][%d]+[Ee]?([%d]+)", "\1\2"),
-        Regex("^([%a%s%p%d]+)%-[%s]-([%d]+)[%s%p]*[^%a]*", "\1\2"),
-        Regex("^([%a%s%p]+)[%s]+(%d+)$", "\1\2"),
-        Regex("^([%a%s%p]+)[%s]+(%d+)[%s]*.*$", "\1\2"),
-        Regex("^([%a%s%p%d]+)[Ee]?[Pp]?[%s]+(%d+)$", "\1\2"),
-        Regex("^([%a%s%p%d]+)[%s](%d+).*$", "\1\2"),
-        Regex("^([%d]+)[%s]*(.+)$", "\2\1") }
+        Regex("^([%a%s%p]+)[%s]+(%d+)$", "\1\2"),  -- "Title 077" at end
+        Regex("^([%a%s%p]+)[%s]+(%d+)[%s]+", "\1\2"),  -- "Title 077 " with trailing space
+        Regex("^([%a%s%p%d]+)[Ss][%d]+[Ee]?([%d]+)", "\1\2"),  -- S01E05
+        Regex("^([%a%s%p%d]+)%-[%s]-([%d]+)[%s%p]*[^%a]*", "\1\2"),  -- Title - 05
+        Regex("^([%a%s%p%d]+)[Ee][Pp]?[%s]*(%d+)", "\1\2"),  -- EP05 or E05
+        Regex("^([%d]+)[%s]*(.+)$", "\2\1")  -- 05 Title (reversed)
+    }
     local _, re = matchers:find_first(function(re) return re:match(text) end)
     if re then
         local title, ep_number = re:groups()
@@ -206,9 +277,12 @@ function backend.extract_title_and_number(text)
 end
 
 function backend:parse_current_file(filename)
+    print(string.format("[mpv_subversive] Original filename: '%s'", filename))
     local sanitized_filename = self.sanitize(filename)
-    print(string.format("Sanitized filename: '%s'", sanitized_filename))
-    return self.extract_title_and_number(sanitized_filename)
+    print(string.format("[mpv_subversive] Sanitized filename: '%s'", sanitized_filename))
+    local title, ep = self.extract_title_and_number(sanitized_filename)
+    print(string.format("[mpv_subversive] Extracted - Title: '%s', Episode: %s", title, ep or "nil"))
+    return title, ep
 end
 
 return backend

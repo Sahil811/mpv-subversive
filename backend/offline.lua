@@ -1,29 +1,36 @@
-local util = require 'utils/utils'
+local utils = require 'utils.utils'  -- fixed: was 'utils/utils' (slash-style fails on some platforms)
 local mpu = require 'mp.utils'
 
 ---@class Offline : Backend
 ---@field subtitle_mapping string
 local offline = {}
 
+function offline:get_scheduler()
+    -- offline backend doesn't use async downloads
+    return { poll = function() return {} end, has_remaining = function() return false end, quit = function() end }
+end
+
 function offline:query_subtitles(show_info)
-    print(("found ID: %s, looking for matches in %q"):format(show_info.anilist_data.id, self.subtitle_mapping))
-    if not util.path_exists(self.subtitle_mapping) then
-        return { error = ("Could not find mapping file '%q'"):format(self.subtitle_mapping) }
+    print(("[mpv-subversive] offline: found ID: %s, looking for matches in %q"):format(show_info.anilist_data.id, self.subtitle_mapping))
+    if not utils.path_exists(self.subtitle_mapping) then
+        return { error = (("Could not find mapping file '%s'"):format(self.subtitle_mapping)) }
     end
     local mapping_dir, _ = mpu.split_path(self.subtitle_mapping)
     local subtitles = {}
-    util.open_file(self.subtitle_mapping, 'r', function(f)
+    utils.open_file(self.subtitle_mapping, 'r', function(f)
         for entry in f:lines("*l") do
             local id, path = entry:match("^([%d]+),\"(.+)\"$")
             if tonumber(id) == show_info.anilist_data.id then
-                if path[1] ~= '/' then
+                if path:sub(1, 1) ~= '/' and path:sub(2, 2) ~= ':' then
+                    -- relative path — prepend mapping_dir
                     path = mapping_dir .. path
                 end
-                assert(util.path_exists(path), ("Path in mapping was invalid: '%q'"):format(path))
-                path = path .. '/' -- makes sure we error out if this isn't a directory
-                for _, file in ipairs(util.run_cmd(("ls %q"):format(path))) do
+                assert(utils.path_exists(path), ("Path in mapping was invalid: '%s'"):format(path))
+                -- Cross-platform directory listing using mp.utils.readdir
+                local files = mpu.readdir(path, "files") or {}
+                for _, file in ipairs(files) do
                     if self:is_supported_archive(file) then
-                        local _, files_in_archive = self:extract_archive(path .. file, show_info)
+                        local _, files_in_archive = self:extract_archive(path .. '/' .. file, show_info)
                         for _, ff in ipairs(files_in_archive) do
                             ff.last_modified = 1
                             table.insert(subtitles, ff)
@@ -32,7 +39,7 @@ function offline:query_subtitles(show_info)
                         table.insert(subtitles, {
                             name = file,
                             matching_episode = self:is_matching_episode(show_info, file),
-                            absolute_path = path .. file,
+                            absolute_path = path .. '/' .. file,
                             is_downloaded = true,
                             last_modified = 1
                         })

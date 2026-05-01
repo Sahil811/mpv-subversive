@@ -1,0 +1,54 @@
+# mpv-subversive Configuration Example
+# Copy this file to your MPV script-opts directory as mpv-subversive.conf
+# Default location: ~/.config/mpv/script-opts/mpv-subversive.conf (Linux)
+#                   %APPDATA%/mpv/script-opts/mpv-subversive.conf (Windows)
+
+# Enable or disable the plugin
+enabled=yes
+
+# Directory to save selected subtitles (relative to video file or absolute path)
+# Leave empty to disable saving
+chosen_sub_dir=./subs
+
+# Cache directory for downloaded subtitles
+# Windows: C:/temp/subloader
+# Linux: /tmp/subloader
+cache_directory=/tmp/subloader
+
+# Enable caching of AniList lookups (stores .anilist.id file in video directory)
+enable_lookup_caching=yes
+
+# Directories to exclude from lookup caching (semicolon-separated)
+# Example: /tmp;/downloads/misc
+media_blacklist_dir=
+
+# Subtitle backend: jimaku or offline
+subtitle_backend=jimaku
+
+# Jimaku API token (required for jimaku backend)
+# Get your token from: https://jimaku.cc/account
+API_TOKEN=
+
+# Auto-load best matching subtitle on file load
+# Requires episode detection and cached .anilist.id file
+auto_load_subs=no
+
+# Preferred subtitle language codes (comma-separated)
+# Common codes: ja, jp, jpn (Japanese), en, eng (English)
+preferred_languages=ja,jp,jpn
+
+# Show OSD notifications for operations
+show_notifications=yes
+
+# Number of retry attempts for failed downloads
+download_retry_count=3
+
+# HTTP request timeout in seconds
+http_timeout=30
+
+# Offline backend settings (only used when subtitle_backend=offline)
+# Path to mapping.csv file that links AniList IDs to local subtitle directories
+subtitle_mapping=
+
+# Keybindings (set in input.conf instead):
+# q script-binding find_sub    # Open subtitle browser

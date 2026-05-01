@@ -16,22 +16,40 @@ end
 ---@return table containing all subtitles for the given show, with optional error field if something went wrong
 function jimaku:query_subtitles(show_info)
     if not self.API_TOKEN or self.API_TOKEN == "" then
-        return { error = "no API_TOKEN available! Cannot do lookup." }
+        return { error = "No API_TOKEN configured! Please add your Jimaku API key to mpv-subversive.conf" }
     end
+    
     local anilist_id = show_info.anilist_data.id
-    mp.osd_message(("Finding matching subtitles for AniList ID '%s'"):format(anilist_id), 3)
-    -- we don't need this here, but this takes a sec to load, and it feels better to do it here
+    if self.show_notifications then
+        mp.osd_message(("Finding subtitles for AniList ID: %s"):format(anilist_id), 3)
+    end
+    
+    -- Initialize scheduler
     self:get_scheduler()
+    
     local response = HTTPClient:sync_GET {
         url = self.BASE_URL .. "entries/search",
         params = { anilist_id = anilist_id },
         headers = { ["Authorization"] = self.API_TOKEN }
     }
-    if response.status_code ~= 200 then
-        return { error = ("Unexpected return code: %d: %s"):format(response.status_code, response.data) }
+    
+    if response.status_code == 401 then
+        return { error = "Invalid API token! Please check your Jimaku API key in mpv-subversive.conf" }
+    elseif response.status_code == 404 then
+        return { error = ("No subtitles found for AniList ID: %s"):format(anilist_id) }
+    elseif response.status_code ~= 200 then
+        return { error = ("Jimaku API error [%d]: %s"):format(response.status_code, response.data or "Unknown error") }
     end
+    
     local entries, err = mpu.parse_json(response.data)
-    assert(entries, err)
+    if not entries then
+        return { error = ("Failed to parse Jimaku response: %s"):format(err or "Invalid JSON") }
+    end
+    
+    if #entries == 0 then
+        return { error = ("No subtitle entries found for AniList ID: %s"):format(anilist_id) }
+    end
+    
     local util = require 'utils.utils'
     local cached_path = self:get_cached_path(show_info)
     if util.is_windows() then
@@ -41,25 +59,50 @@ function jimaku:query_subtitles(show_info)
     end
 
     local items = {}
+    local total_files = 0
+    
     for _, entry in ipairs(entries) do
-        for _, file in ipairs(self:get_files(entry.id)) do
-            file.is_archive = self:is_supported_archive(file.name)
-            file.matching_episode = self:is_matching_episode(show_info, file.name)
-            file.absolute_path = cached_path .. '/' .. file.name
-            local _, _, year, month, day, hour, minute, second = string.find(file.last_modified,
-                "(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+).?%d*Z")
-            assert(year, ("Could not parse last_modified time '%s'"):format(file.last_modified))
-            file.last_modified = os.time({
-                year = year,
-                month = month,
-                day = day,
-                hour = hour,
-                minute = minute,
-                second = second
-            })
-            table.insert(items, file)
+        local files, file_err = self:get_files(entry.id)
+        if files then
+            for _, file in ipairs(files) do
+                file.is_archive = self:is_supported_archive(file.name)
+                file.matching_episode = self:is_matching_episode(show_info, file.name)
+                file.absolute_path = cached_path .. '/' .. file.name
+                file.entry_id = entry.id
+                
+                -- Parse last_modified timestamp
+                -- Bug 25 fix: parse ISO 8601 datetime, flexible timezone handling
+                local _, _, year, month, day, hour, minute, second =
+                    string.find(file.last_modified or "", "(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
+                if year then
+                    file.last_modified = os.time({
+                        year = year,
+                        month = month,
+                        day = day,
+                        hour = hour,
+                        minute = minute,
+                        second = second
+                    })
+                else
+                    file.last_modified = 0
+                end
+                
+                table.insert(items, file)
+                total_files = total_files + 1
+            end
+        else
+            print(("Warning: Failed to get files for entry %s: %s"):format(entry.id, file_err or "Unknown error"))
         end
     end
+    
+    if total_files == 0 then
+        return { error = "No subtitle files found in entries" }
+    end
+    
+    if self.show_notifications then
+        mp.osd_message(("Found %d subtitle file(s)"):format(total_files), 2)
+    end
+    
     return items
 end
 
@@ -68,8 +111,17 @@ function jimaku:get_files(entry_id)
         url = self.BASE_URL .. ("entries/%s/files"):format(entry_id),
         headers = { ["Authorization"] = self.API_TOKEN }
     }
+    
+    if response.status_code ~= 200 then
+        return nil, ("Failed to get files for entry %s: HTTP %d"):format(entry_id, response.status_code)
+    end
+    
     local result, err = mpu.parse_json(response.data)
-    return assert(result, err)
+    if not result then
+        return nil, ("Failed to parse files response: %s"):format(err or "Invalid JSON")
+    end
+    
+    return result
 end
 
 ---@return Routine
