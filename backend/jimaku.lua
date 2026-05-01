@@ -53,7 +53,7 @@ function jimaku:query_subtitles(show_info)
     local util = require 'utils.utils'
     local cached_path = self:get_cached_path(show_info)
     if util.is_windows() then
-        os.execute(string.format("mkdir %q >nul 2>&1", cached_path))
+        os.execute(string.format('mkdir "%s" >nul 2>&1', cached_path:gsub("/", "\\")))
     else
         os.execute(string.format("mkdir -p %q", cached_path))
     end

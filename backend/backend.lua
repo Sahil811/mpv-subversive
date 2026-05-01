@@ -166,10 +166,14 @@ function backend:extract_archive(file, show_info)
     end
     extract_inner_archive(file)
 
-    -- Copy the original file to tmp_path as well if it's an archive we can extract from
-    -- On Windows we can use mp.command_native or just Lua's io.open/write for small files, but here we'll use a system command
-    local cp_cmd = util.is_windows() and "copy" or "cp"
-    os.execute(string.format("%s %q %q >nul 2>&1", cp_cmd, file, tmp_path))
+    -- Copy the original file to tmp_path using Lua IO for cross-platform reliability
+    util.open_file(file, 'rb', function(fin)
+        local data = fin:read("*a")
+        local _, fname = require('mp.utils').split_path(file)
+        util.open_file(tmp_path .. '/' .. fname, 'wb', function(fout)
+            fout:write(data)
+        end)
+    end)
 
     print(string.format("Extracting matches to: %q", tmp_path))
     local inner_files = mpu.readdir(tmp_path) or {}
@@ -203,7 +207,7 @@ function backend:extract_archive(file, show_info)
 
     -- Bug 15 fix: cross-platform move using Lua IO instead of os.execute with %q
     if util.is_windows() then
-        os.execute(string.format("mkdir \"%s\" >nul 2>&1", cached_path:gsub("/", "\\\\")))
+        os.execute(string.format('mkdir "%s" >nul 2>&1', cached_path:gsub("/", "\\")))
     else
         os.execute(string.format("mkdir -p %q", cached_path))
     end
@@ -220,7 +224,7 @@ function backend:extract_archive(file, show_info)
     end
     -- Clean up temp directory
     if util.is_windows() then
-        os.execute(string.format("rd /S /Q \"%s\" >nul 2>&1", tmp_path:gsub("/", "\\\\")))
+        os.execute(string.format('rd /S /Q "%s" >nul 2>&1', tmp_path:gsub("/", "\\")))
     else
         os.execute(string.format("rm -rf %q", tmp_path))
     end
@@ -277,11 +281,11 @@ function backend.extract_title_and_number(text)
 end
 
 function backend:parse_current_file(filename)
-    print(string.format("[mpv_subversive] Original filename: '%s'", filename))
+    print(string.format("[mpv-subversive] Original filename: '%s'", filename))
     local sanitized_filename = self.sanitize(filename)
-    print(string.format("[mpv_subversive] Sanitized filename: '%s'", sanitized_filename))
+    print(string.format("[mpv-subversive] Sanitized filename: '%s'", sanitized_filename))
     local title, ep = self.extract_title_and_number(sanitized_filename)
-    print(string.format("[mpv_subversive] Extracted - Title: '%s', Episode: %s", title, ep or "nil"))
+    print(string.format("[mpv-subversive] Extracted - Title: '%s', Episode: %s", title, ep or "nil"))
     return title, ep
 end
 

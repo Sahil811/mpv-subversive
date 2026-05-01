@@ -489,17 +489,24 @@ function sub_selector:choose_item(menu_item)
             sub_path = dir .. '/' .. sub_path .. '/'
         end
 
+        -- Create directory (cross-platform)
         if util.is_windows() then
-            os.execute(string.format("mkdir %q >nul 2>&1", sub_path))
+            os.execute(string.format('mkdir "%s" >nul 2>&1', sub_path:gsub("/", "\\")))
         else
             os.execute(("mkdir -p %q"):format(sub_path))
         end
 
+        -- Copy subtitle file using Lua IO for cross-platform reliability
         local sub_fn = table.concat({ sub_path, fn:gsub("[^.]+$", ""), util.get_extension(menu_item.subtitle.name) })
-        local cp_cmd = util.is_windows() and "copy" or "cp"
-        local result = os.execute(string.format("%s %q %q >nul 2>&1", cp_cmd, menu_item.subtitle.absolute_path, sub_fn))
+        local copy_ok = util.open_file(menu_item.subtitle.absolute_path, 'rb', function(fin)
+            local data = fin:read("*a")
+            return util.open_file(sub_fn, 'wb', function(fout)
+                fout:write(data)
+                return true
+            end)
+        end)
 
-        if result == 0 or result == true then
+        if copy_ok then
             if self.backend.show_notifications then
                 mp.osd_message(("Subtitle saved to: %s"):format(sub_path), 3)
             end

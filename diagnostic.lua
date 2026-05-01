@@ -72,7 +72,7 @@ local function check_cache_dir()
     
     -- Try to create it
     if util.is_windows() then
-        os.execute(string.format("mkdir %q >nul 2>&1", cache_dir))
+        os.execute(string.format('mkdir "%s" >nul 2>&1', cache_dir:gsub("/", "\\")))
     else
         os.execute(string.format("mkdir -p %q", cache_dir))
     end
