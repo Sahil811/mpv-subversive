@@ -272,7 +272,7 @@ function Menu:act()
 end
 
 function Menu:get_keybindings()
-    return {
+    local bindings = {
         { key = 'h', fn = function() self:close() end },
         { key = 'j', fn = function() self:down() end },
         { key = 'k', fn = function() self:up() end },
@@ -283,6 +283,10 @@ function Menu:get_keybindings()
         { key = 'ESC', fn = function() self:close() end },
         { key = 'n', fn = function() self:close() end },
     }
+    if self.on_search then
+        table.insert(bindings, { key = '/', fn = function() self:on_search() end })
+    end
+    return bindings
 end
 
 function Menu:open()
@@ -294,9 +298,48 @@ function Menu:open()
     self:draw()
 end
 
+-- Unbind menu keys without triggering close callbacks or erasing OSD.
+-- Use before opening mp.input to avoid keybinding conflicts.
+function Menu:suspend()
+    for _, val in pairs(self:get_keybindings()) do
+        mp.remove_key_binding(val.key)
+    end
+end
+
+-- Rebind menu keys after suspend. Call when mp.input closes.
+function Menu:resume()
+    for _, val in pairs(self:get_keybindings()) do
+        mp.add_forced_key_binding(val.key, val.key, val.fn)
+    end
+    self:draw()
+end
+
+-- Move selection to first visible+selectable item if current selection is invalid.
+function Menu:reanchor_selection()
+    local current = self:get_selected_item()
+    if current and current:is_selectable() then return end
+    -- Try options first
+    for i, opt in ipairs(self.options) do
+        if opt:is_selectable() then
+            if current then current.is_selected = false end
+            self.selected = i
+            opt.is_selected = true
+            return
+        end
+    end
+    -- Then choices
+    for i, choice in ipairs(self.choices) do
+        if choice:is_selectable() then
+            if current then current.is_selected = false end
+            self.selected = #self.options + i
+            choice.is_selected = true
+            return
+        end
+    end
+end
+
 function Menu:close()
     for _, val in pairs(self:get_keybindings()) do
-        -- Bug 18 fix: mp.remove_key_binding only accepts the binding name, not extra args
         mp.remove_key_binding(val.key)
     end
     for _, callback in ipairs(self.on_close_callbacks) do

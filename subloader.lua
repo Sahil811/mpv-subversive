@@ -293,11 +293,13 @@ end
 function sub_selector:init(backend)
     self.backend = backend
     self.showing_all_choices = false
+    self.filter_query = ""
     self.go_back_option = self.go_back_option or self:add_option {
         display_text = " >>>   Return to show selection",
         on_chosen_cb = function()
             self:close()
             self.showing_all_choices = false
+            self.filter_query = ""
             show_selector:display(show_selector.show_list)
         end
     }
@@ -308,6 +310,15 @@ function sub_selector:init(backend)
             self:display()
         end
     }
+    self.search_filter_option = self.search_filter_option or self:add_option {
+        display_text = " >>>   Search/Filter subtitles (/)",
+        on_chosen_cb = function()
+            self:open_search_console()
+        end
+    }
+    self.on_search = function()
+        self:open_search_console()
+    end
     self.download_timer = function()
         local finished_results = self.backend:get_scheduler():poll()
         if #finished_results > 0 then
@@ -567,6 +578,66 @@ function sub_selector:choose_item(menu_item)
     end
 end
 
+local function matches_filter(name, query)
+    if not query or query == "" then return true end
+    local name_lower = name:lower()
+    -- Space-separated terms are AND'd
+    for term in query:lower():gmatch("%S+") do
+        if not name_lower:find(term, 1, true) then
+            return false
+        end
+    end
+    return true
+end
+
+function sub_selector:open_search_console()
+    -- Suspend menu keybindings to avoid conflicts with mp.input.
+    -- If called from act() the menu is already closed; suspend is harmless.
+    self:suspend()
+    local was_open = #self.choices > 0
+    mpi.get {
+        prompt = "Filter subtitles: ",
+        default_text = self.filter_query,
+        edited = function(text)
+            self.filter_query = text or ""
+            -- Live update only when menu items exist (opened via '/')
+            if was_open then self:apply_filter() end
+        end,
+        submit = function(text)
+            self.filter_query = text or ""
+            mpi.terminate()
+            -- Redisplay to apply filter and rebind keys
+            self:display()
+        end,
+        closed = function()
+            -- ESC clears filter
+            self.filter_query = ""
+            self:display()
+        end
+    }
+end
+
+function sub_selector:apply_filter()
+    local visible_count = 0
+    for _, choice in ipairs(self.choices) do
+        if choice.subtitle then
+            local base_visible = self.showing_all_choices or choice.subtitle.matching_episode
+            choice.is_visible = base_visible and matches_filter(choice.subtitle.name, self.filter_query)
+            if choice.is_visible then
+                visible_count = visible_count + 1
+            end
+        end
+    end
+    -- Update header with filter info
+    local header_text = ("Found %d subtitle(s)"):format(#self.subtitles)
+    if self.filter_query ~= "" then
+        header_text = header_text .. (" (showing %d matching '%s')"):format(visible_count, self.filter_query)
+    end
+    self:set_header(header_text)
+    self:reanchor_selection()
+    self:draw()
+end
+
 function sub_selector:display()
     if #self.subtitles == 0 then
         if self.backend.show_notifications then
@@ -589,9 +660,10 @@ function sub_selector:display()
             prefix = "[MATCH] "
         end
 
+        local base_visible = self.showing_all_choices and true or sub.matching_episode
         local menu_entry = self:new_item {
             display_text = prefix .. text,
-            is_visible = self.showing_all_choices and true or sub.matching_episode,
+            is_visible = base_visible and matches_filter(sub.name, self.filter_query),
             font_size = 17,
             on_selected_cb = function(item) self:select_item(item) end,
             on_chosen_cb = function(item) self:choose_item(item) end
@@ -611,10 +683,16 @@ function sub_selector:display()
     end
 
     local header_text = ("Found %d subtitle(s)"):format(#self.subtitles)
-    if matching_subs_count > 0 then
+    if self.filter_query and self.filter_query ~= "" then
+        local filtered_count = 0
+        for _, c in ipairs(self.choices) do
+            if c.is_visible then filtered_count = filtered_count + 1 end
+        end
+        header_text = header_text .. (" (showing %d matching '%s')"):format(filtered_count, self.filter_query)
+    elseif matching_subs_count > 0 then
         header_text = header_text .. (" (%d matching episode)"):format(matching_subs_count)
     end
-    if not self.showing_all_choices and #self.subtitles > matching_subs_count then
+    if not self.showing_all_choices and #self.subtitles > matching_subs_count and (not self.filter_query or self.filter_query == "") then
         header_text = header_text .. (" | Toggle to see all %d"):format(#self.subtitles)
     end
 
