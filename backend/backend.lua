@@ -133,6 +133,71 @@ function backend:query_shows(show_info)
     return parsed.data.Page.media
 end
 
+---Async version of query_shows. Calls callback(results) when done.
+---Uses mp.command_native_async to avoid blocking the UI.
+---@param show_info table containing parsed_title
+---@param callback function called with results table (list of media)
+function backend:query_shows_async(show_info, callback)
+    local graphql_query = [[
+        query ($id: Int, $page: Int=1, $search: String) {
+            Page (page: $page) {
+                media (id: $id, search: $search, type: ANIME) {
+                    id
+                    episodes
+                    format
+                    startDate { year }
+                    endDate { year }
+                    title {
+                        english
+                        romaji
+                        native
+                    }
+                }
+            }
+        }
+    ]]
+
+    local body_json = mpu.format_json({
+        query = graphql_query,
+        variables = { search = show_info.parsed_title }
+    })
+
+    local curl_cmd = util.is_windows() and "curl.exe" or "curl"
+
+    mp.command_native_async({
+        name = "subprocess",
+        capture_stdout = true,
+        capture_stderr = true,
+        args = {curl_cmd, "-s", "-X", "POST",
+            "-H", "Content-Type: application/json",
+            "-H", "Accept: application/json",
+            "--data", body_json,
+            "https://graphql.anilist.co"}
+    }, function(success, result, err)
+        if not success or not result or result.status ~= 0 then
+            print(("[mpv-subversive] AniList async error: %s"):format(
+                err or (result and result.stderr) or "subprocess failed"))
+            callback({})
+            return
+        end
+
+        local ok, parsed = pcall(mpu.parse_json, result.stdout)
+        if not ok or not parsed then
+            print(("[mpv-subversive] AniList parse error: %s"):format(tostring(parsed)))
+            callback({})
+            return
+        end
+
+        if not parsed.data or not parsed.data.Page or not parsed.data.Page.media then
+            print("[mpv-subversive] Unexpected AniList response structure")
+            callback({})
+            return
+        end
+
+        callback(parsed.data.Page.media)
+    end)
+end
+
 ---Extract all subtitles which are available for the given ID
 ---@param show_info table containing parsed_title, ep_number and anilist_data
 ---@return Subtitle[] list of subs for the given show
@@ -141,7 +206,10 @@ function backend:query_subtitles(show_info)
 end
 
 
---- Extract all subtitle files in the given archive and store them in predefined cache directory
+--- Extract all subtitle files in the given archive and store them in predefined cache directory.
+--- NOTE: This runs within async download callbacks (on_complete), so the HTTP download
+--- (the main blocking operation) is already non-blocking. The extraction itself is fast
+--- (~0.1-1s) and doesn't warrant full async conversion given the complexity trade-off.
 ---@param file string: filename which is a archive containing subtitles
 ---@param show_info table containing title, ep_number and anilist_data
 ---@return string path,table files extracted cache path and table with the actual files

@@ -55,81 +55,82 @@ function show_selector:build_manual_lookup_console()
             mp.osd_message(("Searching for: %s..."):format(query), 1)
         end
 
-        local results = self.backend:query_shows { parsed_title = query }
-        search_results = results or {}
+        self.backend:query_shows_async({ parsed_title = query }, function(results)
+            search_results = results or {}
 
-        search_menu.choices = {}
-        search_menu.selected = 1
+            search_menu.choices = {}
+            search_menu.selected = 1
 
-        if #search_results == 0 then
-            search_menu:set_header(("No results for: %s"):format(query))
-            if self.backend.show_notifications then
-                mp.osd_message("No results found", 2)
-            end
-        else
-            search_menu:set_header(("Found %d results for: %s (Use ↑↓ to select, Enter to choose)"):format(#search_results, query))
+            if #search_results == 0 then
+                search_menu:set_header(("No results for: %s"):format(query))
+                if self.backend.show_notifications then
+                    mp.osd_message("No results found", 2)
+                end
+            else
+                search_menu:set_header(("Found %d results for: %s (Use ↑↓ to select, Enter to choose)"):format(#search_results, query))
 
-            for _, anime in ipairs(search_results) do
-                local entry_text = build_menu_entry(anime)
-                entry_text = entry_text .. string.format(" [ID:%d, Eps:%s]",
-                    anime.id, anime.episodes or "?")
+                for _, anime in ipairs(search_results) do
+                    local entry_text = build_menu_entry(anime)
+                    entry_text = entry_text .. string.format(" [ID:%d, Eps:%s]",
+                        anime.id, anime.episodes or "?")
 
-                local menu_item = search_menu:new_item {
-                    display_text = entry_text,
-                    on_chosen_cb = function(item)
-                        search_menu:close()
+                    local menu_item = search_menu:new_item {
+                        display_text = entry_text,
+                        on_chosen_cb = function(item)
+                            search_menu:close()
 
-                        print(("[mpv-subversive] Selected: %s (ID: %d)"):format(
-                            item.anime_data.title.romaji, item.anime_data.id))
+                            print(("[mpv-subversive] Selected: %s (ID: %d)"):format(
+                                item.anime_data.title.romaji, item.anime_data.id))
 
-                        self.show_info.anilist_data = item.anime_data
-                        self.show_info.parsed_title = item.anime_data.title.romaji
-                        self:cache_lookup(item.anime_data)
+                            self.show_info.anilist_data = item.anime_data
+                            self.show_info.parsed_title = item.anime_data.title.romaji
+                            self:cache_lookup(item.anime_data)
 
-                        mpi.get {
-                            prompt = string.format("Episode number for %s: ", item.anime_data.title.romaji),
-                            opened = function()
-                                mpi.log("Enter episode number and press ENTER")
-                                if item.anime_data.episodes then
-                                    mpi.log(("Total episodes: %d"):format(item.anime_data.episodes))
-                                end
-                            end,
-                            submit = function(ep_text)
-                                if not ep_text or #ep_text == 0 then
-                                    mpi.log_error("No episode number entered!")
-                                    return
-                                end
-
-                                local ep_num = tonumber(ep_text)
-                                if ep_num and ep_num > 0 then
-                                    mpi.terminate()
-                                    self.show_info.ep_number = ep_num
-
-                                    if self.backend.show_notifications then
-                                        mp.osd_message(("Loading %s Episode %d..."):format(
-                                            item.anime_data.title.romaji, ep_num), 2)
+                            mpi.get {
+                                prompt = string.format("Episode number for %s: ", item.anime_data.title.romaji),
+                                opened = function()
+                                    mpi.log("Enter episode number and press ENTER")
+                                    if item.anime_data.episodes then
+                                        mpi.log(("Total episodes: %d"):format(item.anime_data.episodes))
+                                    end
+                                end,
+                                submit = function(ep_text)
+                                    if not ep_text or #ep_text == 0 then
+                                        mpi.log_error("No episode number entered!")
+                                        return
                                     end
 
-                                    if not sub_selector.backend then
-                                        sub_selector:init(self.backend)
-                                    end
+                                    local ep_num = tonumber(ep_text)
+                                    if ep_num and ep_num > 0 then
+                                        mpi.terminate()
+                                        self.show_info.ep_number = ep_num
 
-                                    sub_selector:query(self.show_info)
-                                else
-                                    mpi.log_error("Invalid episode number! Please enter a positive number.")
+                                        if self.backend.show_notifications then
+                                            mp.osd_message(("Loading %s Episode %d..."):format(
+                                                item.anime_data.title.romaji, ep_num), 2)
+                                        end
+
+                                        if not sub_selector.backend then
+                                            sub_selector:init(self.backend)
+                                        end
+
+                                        sub_selector:query(self.show_info)
+                                    else
+                                        mpi.log_error("Invalid episode number! Please enter a positive number.")
+                                    end
                                 end
-                            end
-                        }
-                    end
-                }
-                menu_item.anime_data = anime
-                search_menu:add(menu_item)
+                            }
+                        end
+                    }
+                    menu_item.anime_data = anime
+                    search_menu:add(menu_item)
+                end
+
+                search_menu:open()
             end
 
-            search_menu:open()
-        end
-
-        is_searching = false
+            is_searching = false
+        end)
     end
 
     mpi.get {
@@ -245,8 +246,24 @@ function show_selector:cache_lookup(anilist_data)
 end
 
 function show_selector:display(show_list)
-    -- only show at most 10 entries; if more, the show name was probably parsed wrong
-    self.show_list = show_list and show_list or util.table_slice(self.backend:query_shows(self.show_info), 1, 11)
+    if show_list then
+        self.show_list = show_list
+        self:_display_results()
+        return
+    end
+
+    -- Async query with loading indicator
+    if self.backend.show_notifications then
+        mp.osd_message("Searching AniList...", 5)
+    end
+
+    self.backend:query_shows_async(self.show_info, function(results)
+        self.show_list = util.table_slice(results, 1, 11)
+        self:_display_results()
+    end)
+end
+
+function show_selector:_display_results()
     self:clear_choices()
     self:set_header(([[Looking for: %s, episode: %s]]):format(self.show_info.parsed_title,
         self.show_info.ep_number or 'N/A'))
@@ -317,21 +334,22 @@ function sub_selector:query(show_info)
     self.subtitles = {}
     self.show_info = show_info
 
-    local function extract_archive(path_to_archive)
-        local _, files_in_archive = self.backend:extract_archive(path_to_archive, show_info)
-        for _, f in ipairs(files_in_archive) do
-            table.insert(self.subtitles, f)
-        end
-        return files_in_archive
-    end
-
-    local archive_cnt, completed_archive_cnt = 0, 0
-
     if self.backend.show_notifications then
         mp.osd_message("Fetching subtitles...", 5)
     end
 
-    local queried_subtitles = self.backend:query_subtitles(show_info)
+    -- Use async if the backend supports it (jimaku), fallback to sync (offline)
+    if self.backend.query_subtitles_async then
+        self.backend:query_subtitles_async(show_info, function(queried_subtitles)
+            self:_process_subtitle_results(show_info, queried_subtitles)
+        end)
+    else
+        local queried_subtitles = self.backend:query_subtitles(show_info)
+        self:_process_subtitle_results(show_info, queried_subtitles)
+    end
+end
+
+function sub_selector:_process_subtitle_results(show_info, queried_subtitles)
     local err = queried_subtitles['error']
 
     if err then
@@ -350,6 +368,16 @@ function sub_selector:query(show_info)
         end
         return
     end
+
+    local function extract_archive(path_to_archive)
+        local _, files_in_archive = self.backend:extract_archive(path_to_archive, show_info)
+        for _, f in ipairs(files_in_archive) do
+            table.insert(self.subtitles, f)
+        end
+        return files_in_archive
+    end
+
+    local archive_cnt, completed_archive_cnt = 0, 0
 
     for _, sub in ipairs(queried_subtitles) do
         if self:is_cached(sub) then sub.is_downloaded = true end

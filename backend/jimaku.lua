@@ -149,6 +149,134 @@ function jimaku:get_files(entry_id)
     return result
 end
 
+---Async version of query_subtitles. Uses mp.command_native_async for the
+---initial entry search to avoid blocking the UI. File lookups for each entry
+---are done synchronously within the async callback (they are small/fast).
+---@param show_info table containing title, ep_number and anilist_data
+---@param callback function called with results table (list of files or {error=...})
+function jimaku:query_subtitles_async(show_info, callback)
+    if not self.API_TOKEN or self.API_TOKEN == "" then
+        callback({ error = "No API_TOKEN configured! Please add your Jimaku API key to mpv-subversive.conf" })
+        return
+    end
+
+    local anilist_id = show_info.anilist_data.id
+    if self.show_notifications then
+        mp.osd_message(("Finding subtitles for AniList ID: %s"):format(anilist_id), 3)
+    end
+
+    self:get_scheduler()
+
+    local util = require 'utils.utils'
+    local curl_cmd = util.is_windows() and "curl.exe" or "curl"
+    local encoded_id = tostring(anilist_id)
+
+    mp.command_native_async({
+        name = "subprocess",
+        capture_stdout = true,
+        capture_stderr = true,
+        args = {curl_cmd, "-s",
+            "-H", "Authorization: " .. self.API_TOKEN,
+            self.BASE_URL .. "entries/search?anilist_id=" .. encoded_id}
+    }, function(success, result, err)
+        if not success or not result or result.status ~= 0 then
+            callback({ error = ("Jimaku search failed: %s"):format(
+                err or (result and result.stderr) or "subprocess error") })
+            return
+        end
+
+        local entries, parse_err = mpu.parse_json(result.stdout)
+        if not entries then
+            callback({ error = ("Failed to parse Jimaku response: %s"):format(parse_err or "Invalid JSON") })
+            return
+        end
+
+        if type(entries) == "table" and entries.error then
+            callback({ error = ("Jimaku API error: %s"):format(entries.error) })
+            return
+        end
+
+        if #entries == 0 then
+            callback({ error = ("No subtitle entries found for AniList ID: %s"):format(anilist_id) })
+            return
+        end
+
+        -- Process entries — file lookups are small/fast, done synchronously here
+        local cached_path = self:get_cached_path(show_info)
+        util.mkdir_p(cached_path)
+
+        local items = {}
+        local total_files = 0
+
+        for _, entry in ipairs(entries) do
+            local files, file_err = self:get_files(entry.id)
+            if files then
+                for _, file in ipairs(files) do
+                    file.is_archive = self:is_supported_archive(file.name)
+                    file.matching_episode = self:is_matching_episode(show_info, file.name)
+                    file.absolute_path = cached_path .. '/' .. file.name
+                    file.entry_id = entry.id
+
+                    local _, _, year, month, day, hour, minute, second =
+                        string.find(file.last_modified or "", "(%d+)-(%d+)-(%d+)T(%d+):(%d+):(%d+)")
+                    if year then
+                        file.last_modified = os.time({
+                            year = year, month = month, day = day,
+                            hour = hour, minute = minute, second = second
+                        })
+                    else
+                        file.last_modified = 0
+                    end
+
+                    table.insert(items, file)
+                    total_files = total_files + 1
+                end
+            else
+                print(("Warning: Failed to get files for entry %s: %s"):format(entry.id, file_err or "Unknown error"))
+            end
+        end
+
+        -- Filter by preferred languages if configured
+        if self.preferred_languages and #self.preferred_languages > 0 then
+            local lang_codes = {}
+            for code in self.preferred_languages:gmatch("([^,]+)") do
+                table.insert(lang_codes, code:match("^%s*(.-)%s*$"):lower())
+            end
+
+            local preferred_items = {}
+            for _, item in ipairs(items) do
+                local name_lower = item.name:lower()
+                for _, code in ipairs(lang_codes) do
+                    if name_lower:match("[%.%-%_%s%[]" .. code .. "[%.%-%_%s%]%)]")
+                       or name_lower:match("^" .. code .. "[%.%-%_%s]") then
+                        table.insert(preferred_items, item)
+                        break
+                    end
+                end
+            end
+
+            if #preferred_items > 0 then
+                items = preferred_items
+                total_files = #items
+                if self.show_notifications then
+                    mp.osd_message(("Filtered to %d subtitle(s) matching preferred language"):format(total_files), 2)
+                end
+            end
+        end
+
+        if total_files == 0 then
+            callback({ error = "No subtitle files found in entries" })
+            return
+        end
+
+        if self.show_notifications then
+            mp.osd_message(("Found %d subtitle file(s)"):format(total_files), 2)
+        end
+
+        callback(items)
+    end)
+end
+
 ---@return Routine
 function jimaku:download_subtitle(file_entry)
     return HTTPClient:async_GET {
