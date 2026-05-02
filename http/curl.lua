@@ -55,7 +55,7 @@ function CURL:build_curl_cmd(request, method)
     add_args(get_curl_cmd(), "-i", "--http1.1", "--raw")
     add_args("-X", (assert(method, "Missing method! Expected GET or POST")))
 
-    -- Apply configured timeout if available
+    -- OPTS is a global set by main.lua during initialization
     local timeout = OPTS and OPTS.http_timeout
     if timeout and tonumber(timeout) then
         add_args("--max-time", tostring(timeout))

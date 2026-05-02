@@ -1,4 +1,5 @@
 local regex = {}
+-- NOTE: Regex is intentionally global for backward compatibility with callers
 function Regex(pattern, capture_groups)
 	return setmetatable({ pattern = pattern, capture_groups = capture_groups }, { __index = regex })
 end

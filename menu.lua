@@ -169,9 +169,7 @@ function Menu:add_option(item_opts)
 end
 
 function Menu:clear_choices(with_redraw)
-    for _=1, #self.choices do
-        table.remove(self.choices, 1)
-    end
+    self.choices = {}
     if with_redraw then
         self:draw()
     end

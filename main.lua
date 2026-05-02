@@ -37,6 +37,7 @@ OPTS = {
     download_retry_count = 3,
     -- Timeout for HTTP requests in seconds
     http_timeout = 30,
+    keybinding = "b",
 }
 options.read_options(OPTS, 'mpv-subversive')
 
@@ -48,7 +49,7 @@ local function init()
     if initialized then return end
     initialized = true
     backend = require("backend.backend"):new(OPTS)
-    mp.add_key_binding("q", "find_sub", function() loader:run(backend) end)
+    mp.add_key_binding(OPTS.keybinding, "find_sub", function() loader:run(backend) end)
 end
 
 local function on_file_loaded()

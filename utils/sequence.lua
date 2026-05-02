@@ -25,6 +25,7 @@ local function iterable(sequence)
 	return _iter, sequence, 1
 end
 
+-- NOTE: Sequence is intentionally global for backward compatibility with callers
 function Sequence(args)
 	return setmetatable({ items = args, predicates = {} }, { __index = seq })
 end

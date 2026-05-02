@@ -1,5 +1,7 @@
 local utils = {}
 
+math.randomseed(os.time() + os.clock() * 1000)
+
 function utils.is_windows()
     return package.config:sub(1, 1) == "\\"
 end
@@ -32,7 +34,11 @@ end
 function utils.get_temporary_path()
     if utils.is_windows() then
         local temp = os.getenv("TEMP") or os.getenv("TMP") or "C:\\temp"
-        local path = string.format("%s\\sub-tmp-%d", temp, math.random(1000, 9999))
+        -- Use os.tmpname() for a unique name instead of unseeded math.random
+        local tmpname = os.tmpname()
+        os.remove(tmpname)
+        local dirname = tmpname:match("([^/\\]+)$") or ("sub-tmp-" .. os.time())
+        local path = string.format("%s\\%s", temp, dirname)
         os.execute(string.format('mkdir "%s" >nul 2>&1', path))
         return path
     else
@@ -96,7 +102,10 @@ end
 function utils.run_cmd(cmd)
     local output = {}
     local f = io.popen(cmd, 'r')
-    if not f then return {} end
+    if not f then
+        print(("[mpv-subversive] Warning: Failed to run command: %s"):format(cmd))
+        return {}
+    end
     for line in f:lines("*l") do
         table.insert(output, line)
     end
@@ -112,6 +121,8 @@ function utils.iterate_cmd(cmd)
             table.insert(output, line)
         end
         f:close()
+    else
+        print(("[mpv-subversive] Warning: Failed to run command: %s"):format(cmd))
     end
     return function()
         return table.remove(output, 1)

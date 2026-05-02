@@ -5,12 +5,16 @@
 local mp = require 'mp'
 local mpu = require 'mp.utils'
 
+local function get_null_redirect()
+    return (package.config:sub(1,1) == "\\") and " >nul 2>&1" or " >/dev/null 2>&1"
+end
+
 local function check_curl()
-    local result = os.execute("curl --version >nul 2>&1")
+    local result = os.execute("curl --version" .. get_null_redirect())
     if result == 0 or result == true then
         return "✓ curl found"
     end
-    result = os.execute("curl.exe --version >nul 2>&1")
+    result = os.execute("curl.exe --version" .. get_null_redirect())
     if result == 0 or result == true then
         return "✓ curl.exe found"
     end
@@ -21,7 +25,7 @@ local function check_extractors()
     local tools = {"unzip", "unrar", "7z"}
     local results = {}
     for _, tool in ipairs(tools) do
-        local cmd = tool .. " --version >nul 2>&1"
+        local cmd = tool .. " --version" .. get_null_redirect()
         local result = os.execute(cmd)
         if result == 0 or result == true then
             table.insert(results, "✓ " .. tool)
