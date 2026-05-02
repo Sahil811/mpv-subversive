@@ -83,9 +83,8 @@ if OPTS.enabled then
             backend.scheduler:quit()
         end
         for anilist_id, cache_table in pairs(backend.cache or {}) do
-            util.open_file(backend.cache_directory .. '/' .. anilist_id .. '/' .. 'cache.json', 'w', function(f)
-                f:write(mpu.format_json(util.copy_table(cache_table)))
-            end)
+            local cache_path = backend.cache_directory .. '/' .. anilist_id .. '/' .. 'cache.json'
+            util.write_file_atomic(cache_path, mpu.format_json(util.copy_table(cache_table)))
         end
     end)
 end

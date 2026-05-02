@@ -132,21 +132,29 @@ function jimaku:query_subtitles(show_info)
 end
 
 function jimaku:get_files(entry_id)
-    local response = HTTPClient:sync_GET {
-        url = self.BASE_URL .. ("entries/%s/files"):format(entry_id),
-        headers = { ["Authorization"] = self.API_TOKEN }
-    }
-    
-    if response.status_code ~= 200 then
-        return nil, ("Failed to get files for entry %s: HTTP %d"):format(entry_id, response.status_code)
+    local max_retries = 2
+    for attempt = 1, max_retries + 1 do
+        local response = HTTPClient:sync_GET {
+            url = self.BASE_URL .. ("entries/%s/files"):format(entry_id),
+            headers = { ["Authorization"] = self.API_TOKEN }
+        }
+
+        if response.status_code == 200 then
+            local result, err = mpu.parse_json(response.data)
+            if not result then
+                return nil, ("Failed to parse files response: %s"):format(err or "Invalid JSON")
+            end
+            return result
+        end
+
+        -- Retry on server errors or connection failures
+        if attempt <= max_retries and (response.status_code == 0 or response.status_code >= 500) then
+            print(("[mpv-subversive] Retrying get_files for entry %s (attempt %d/%d)"):format(
+                entry_id, attempt + 1, max_retries + 1))
+        else
+            return nil, ("Failed to get files for entry %s: HTTP %d"):format(entry_id, response.status_code)
+        end
     end
-    
-    local result, err = mpu.parse_json(response.data)
-    if not result then
-        return nil, ("Failed to parse files response: %s"):format(err or "Invalid JSON")
-    end
-    
-    return result
 end
 
 ---Async version of query_subtitles. Uses mp.command_native_async for the

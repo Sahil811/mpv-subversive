@@ -267,8 +267,10 @@ function Menu:get_selected_item()
 end
 
 function Menu:act()
+    local item = self:get_selected_item()
+    if not item or not item:is_selectable() then return end
     self:close()
-    self:get_selected_item():on_chosen_cb()
+    item:on_chosen_cb()
 end
 
 function Menu:get_keybindings()

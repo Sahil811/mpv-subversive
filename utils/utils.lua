@@ -215,4 +215,15 @@ function utils.copy_table(t)
     return copy
 end
 
+-- Atomic file write: write to temp file then rename to prevent corruption
+function utils.write_file_atomic(path, content)
+    local tmp = path .. ".tmp"
+    local f = io.open(tmp, 'w')
+    if not f then return false end
+    f:write(content)
+    f:close()
+    os.remove(path)
+    return os.rename(tmp, path)
+end
+
 return utils

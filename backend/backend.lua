@@ -81,8 +81,15 @@ function backend.parse_episode_info(raw_filename)
     -- Normalize separators: underscores and dots → spaces
     name = name:gsub("_", " "):gsub("%.", " ")
 
-    -- Detect version suffix anywhere: v2, v3
-    local ver = name:match("[Vv](%d+)")
+    -- Strip known codec/resolution tags to prevent false episode matches (e.g., x265 → ep 265)
+    name = name:gsub("[xXhH]264", " "):gsub("[xXhH]265", " ")
+    name = name:gsub("HEVC", " "):gsub("AVC", " "):gsub("AAC", " "):gsub("FLAC", " ")
+    name = name:gsub("1080p", " "):gsub("720p", " "):gsub("480p", " "):gsub("1080i", " ")
+    name = name:gsub("10[Bb]it", " "):gsub("8[Bb]it", " ")
+
+    -- Detect version suffix: v2, v3, but only when adjacent to a digit (e.g., 10v2)
+    local ver = name:match("%dv(%d+)")
+    if not ver then ver = name:match("%d[Vv](%d+)") end
     if ver and tonumber(ver) <= 9 then
         info.version = tonumber(ver)
     end
@@ -255,9 +262,15 @@ end
 ---@return number|nil season number from folder path
 function backend.parse_season_from_path(relative_path)
     if not relative_path then return nil end
-    -- Match "Season X" or "S01" in the directory portion
+    -- Match "Season X", "Series X", "Vol. X", or "S01" in the directory portion
     local dir = relative_path:match("^(.+)/[^/]+$") or ""
     local season = dir:match("[Ss]eason[%s]*(%d+)")
+    if not season then
+        season = dir:match("[Ss]eries[%s]*(%d+)")
+    end
+    if not season then
+        season = dir:match("[Vv]ol%.?[%s]*(%d+)")
+    end
     if not season then
         season = dir:match("[Ss](%d+)")
     end
@@ -266,7 +279,7 @@ function backend.parse_season_from_path(relative_path)
 end
 
 function backend:is_matching_episode(show_info, filename, relative_path)
-    if not show_info.ep_number or show_info.ep_number <= 0 then
+    if not show_info or not show_info.ep_number or show_info.ep_number <= 0 then
         return true
     end
 
@@ -485,7 +498,22 @@ function backend:query_subtitles(show_info)
 end
 
 
+--- Check if a path component is safe (no traversal attacks).
+---@param path string the relative path to validate
+---@return boolean true if safe
+local function is_safe_path(path)
+    if not path then return false end
+    -- Reject absolute paths and drive letters
+    if path:match("^/") or path:match("^\\") or path:match("^%a:") then return false end
+    -- Reject path traversal
+    for component in path:gmatch("[^/\\]+") do
+        if component == ".." then return false end
+    end
+    return true
+end
+
 --- Recursively list all files under a directory, returning relative paths.
+--- Rejects unsafe paths (path traversal) from archive extraction.
 ---@param base_path string the root directory
 ---@param prefix string current relative path prefix (empty for root)
 ---@return table list of {relative_path, full_path} pairs
@@ -494,6 +522,9 @@ local function list_files_recursive(base_path, prefix)
     local results = {}
     local entries = mpu.readdir(base_path) or {}
     for _, entry in ipairs(entries) do
+        if not is_safe_path(entry) then
+            print(("[mpv-subversive] Skipping unsafe path in archive: %s"):format(entry))
+        else
         local full = base_path .. '/' .. entry
         local rel = prefix == "" and entry or (prefix .. '/' .. entry)
         if util.path_exists(full) then
@@ -510,6 +541,7 @@ local function list_files_recursive(base_path, prefix)
                 results[#results + 1] = { relative_path = rel, full_path = full, name = entry }
             end
         end
+        end -- is_safe_path
     end
     return results
 end
@@ -521,8 +553,15 @@ end
 ---@return string path,table files extracted cache path and table with the actual files
 function backend:extract_archive(file, show_info)
     local tmp_path = util.get_temporary_path()
+    local MAX_ARCHIVE_DEPTH = 3
+    local MAX_EXTRACTED_FILES = 500
 
-    local function extract_inner_archive(path_to_archive)
+    local function extract_inner_archive(path_to_archive, depth)
+        depth = depth or 0
+        if depth > MAX_ARCHIVE_DEPTH then
+            print(("[mpv-subversive] Max archive nesting depth (%d) reached, skipping"):format(MAX_ARCHIVE_DEPTH))
+            return
+        end
         print(string.format("Looking for archive files in: %q", path_to_archive))
         local parser = archive:new(path_to_archive)
         if not parser then
@@ -537,10 +576,13 @@ function backend:extract_archive(file, show_info)
         for arch in parser:list_files { filter = archive_filter } do
             parser:extract { filter = { arch }, target_path = tmp_path }
             local a_path = string.format("%s/%s", tmp_path, util.strip_path(arch))
-            extract_inner_archive(a_path)
+            extract_inner_archive(a_path, depth + 1)
         end
     end
-    extract_inner_archive(file)
+
+    -- Wrap extraction in protected call to ensure temp cleanup on error
+    local ok, err = pcall(function()
+    extract_inner_archive(file, 0)
 
     -- Copy the original file to tmp_path using Lua IO for cross-platform reliability
     util.open_file(file, 'rb', function(fin)
@@ -575,9 +617,13 @@ function backend:extract_archive(file, show_info)
 
     -- Collect all files recursively, handling duplicate basenames
     local final_files = list_files_recursive(tmp_path)
+    if #final_files > MAX_EXTRACTED_FILES then
+        print(("[mpv-subversive] Warning: archive contains %d files, limiting to %d"):format(#final_files, MAX_EXTRACTED_FILES))
+    end
     local seen_names = {}
 
-    for _, entry in ipairs(final_files) do
+    for i, entry in ipairs(final_files) do
+        if i > MAX_EXTRACTED_FILES then break end
         -- Skip non-subtitle files (fonts, NFO, etc.)
         local ext = (util.get_extension(entry.name) or ""):lower()
         local sub_extensions = { srt=1, ass=1, ssa=1, sub=1, vtt=1, idx=1 }
@@ -636,9 +682,15 @@ function backend:extract_archive(file, show_info)
             end
         end
     end
-    -- Clean up temp directory
+    end) -- pcall end
+
+    -- Always clean up temp directory, even on error
     util.rmdir(tmp_path)
-    return cached_path, files
+    if not ok then
+        print(("[mpv-subversive] Archive extraction error: %s"):format(tostring(err)))
+        return self:get_cached_path(show_info), {}
+    end
+    return self:get_cached_path(show_info), files
 end
 
 function backend:get_cached_path(show_info)

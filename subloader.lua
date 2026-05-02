@@ -505,9 +505,7 @@ function sub_selector:flush_cache()
     local mpu = require 'mp.utils'
     local util = require 'utils.utils'
     local cache_path = self.backend:get_cached_path(self.show_info) .. 'cache.json'
-    util.open_file(cache_path, 'w', function(f)
-        f:write(mpu.format_json(util.copy_table(cache_table)))
-    end)
+    util.write_file_atomic(cache_path, mpu.format_json(util.copy_table(cache_table)))
 end
 
 function sub_selector:select_item(menu_item)
@@ -554,7 +552,12 @@ function sub_selector:choose_item(menu_item)
         end
 
         -- Create directory (cross-platform)
-        util.mkdir_p(sub_path)
+        if not util.mkdir_p(sub_path) then
+            if self.backend.show_notifications then
+                mp.osd_message(("Failed to create directory: %s"):format(sub_path), 3)
+            end
+            return
+        end
 
         -- Copy subtitle file using Lua IO for cross-platform reliability
         local sub_fn = table.concat({ sub_path, fn:gsub("[^.]+$", ""), util.get_extension(menu_item.subtitle.name) })
