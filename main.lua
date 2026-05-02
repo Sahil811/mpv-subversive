@@ -37,7 +37,7 @@ OPTS = {
     download_retry_count = 3,
     -- Timeout for HTTP requests in seconds
     http_timeout = 30,
-    keybinding = "b",
+    keybinding = "q",
 }
 options.read_options(OPTS, 'mpv-subversive')
 
