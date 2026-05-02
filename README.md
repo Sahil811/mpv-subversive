@@ -1,6 +1,6 @@
 # mpv-subversive
 
-![MPV Subversive Demo](https://github.com/user-attachments/assets/00b0fa29-70e3-4cf9-8637-c21c13af37fb)
+https://github.com/user-attachments/assets/00b0fa29-70e3-4cf9-8637-c21c13af37fb
 
 A powerful, cross-platform (Windows & GNU/Linux) MPV plugin that makes it seamless to find, download, and load subtitles for the anime you're watching. 
 
