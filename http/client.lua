@@ -29,6 +29,14 @@ local HTTPClient = {
     err_msg = "Invalid %s request: %s",
 }
 local ok, carrier = pcall(require, "http.socket")
+local curl_carrier = nil
+local function get_curl_carrier()
+    if not curl_carrier then
+        curl_carrier = require("http.curl")
+    end
+    return curl_carrier
+end
+
 if not ok then
     -- Bug 21 fix: use platform-appropriate null redirect
     local null_redirect = utils.is_windows() and ">nul 2>&1" or ">/dev/null 2>&1"
@@ -37,7 +45,25 @@ if not ok then
         found = os.execute("curl --version " .. null_redirect)
     end
     assert(found == 0 or found == true, "curl command was not found! Unable to initialize")
-    carrier = require("http.curl")
+    carrier = get_curl_carrier()
+end
+
+--- Wraps a socket transport call in pcall; on failure, logs and retries with curl.
+---@param method_name string name of the method ("sync_GET" or "POST")
+---@param request Request
+---@return Response
+local function try_with_fallback(method_name, self, request)
+    local call_ok, result = pcall(function()
+        return carrier[method_name](self, request)
+    end)
+    if call_ok and result and result.status_code ~= 0 then
+        return result
+    end
+    -- Socket transport failed at runtime; fall back to curl
+    local err_detail = call_ok and (result and result.data or "unknown error") or tostring(result)
+    print(("[mpv-subversive] Warning: socket %s failed (%s), falling back to curl"):format(method_name, err_detail))
+    local fb = get_curl_carrier()
+    return fb[method_name](self, request)
 end
 
 ---@param request Request
@@ -67,8 +93,14 @@ function HTTPClient:parse_response(response)
         return table.concat(header_str, "\n\t - ")
     end
     local _, e, status_code, status_reason = response:find("^HTTP/[.1-3]+ (%d+)%s?([%s%w]*)\r?\n")
-    assert(type(e) == "number",
-        ("Could not parse HTTP header from response: \"%s\""):format(({ response:find("^(.+)\r?\n") })[3] or response))
+    if type(e) ~= "number" then
+        return {
+            data = ("Could not parse HTTP header from response: \"%s\""):format(({ response:find("^(.+)\r?\n") })[3] or response),
+            headers = {},
+            status_code = 0,
+            status_message = "Parse error"
+        }
+    end
     local init_idx = e + 1
     while not data do
         local start_idx, end_idx = response:find("(\r?\n)", init_idx)
@@ -102,8 +134,9 @@ function HTTPClient:parse_response(response)
                     print("[mpv-subversive] Warning: received less data than Content-Length declared")
                 end
             else
-                error(("Unable to parse response. headers: \n\t - [ %s ],\n remaining response data:\n \"%s\""):format(
-                    print_headers(), response:sub(init_idx, #response)))
+                -- Unknown transfer encoding; return whatever data remains
+                print(("[mpv-subversive] Warning: no content-length or chunked encoding. headers: \n\t - [ %s ]"):format(print_headers()))
+                data = response:sub(init_idx, #response)
             end
         end
         init_idx = end_idx and end_idx + 1 or #response
@@ -178,4 +211,16 @@ function HTTPClient:async_save(request)
         end)
 end
 
-return setmetatable(HTTPClient, { __index = function(t, k) return rawget(t, k) or carrier[k] end })
+-- When socket transport is loaded, wrap sync_GET and POST with fallback logic.
+-- async_GET passes through directly (too complex for simple retry).
+local use_socket_fallback = ok  -- true if socket carrier was loaded
+return setmetatable(HTTPClient, { __index = function(t, k)
+    local v = rawget(t, k)
+    if v then return v end
+    if use_socket_fallback and (k == "sync_GET" or k == "POST") then
+        return function(self, request)
+            return try_with_fallback(k, self, request)
+        end
+    end
+    return carrier[k]
+end })

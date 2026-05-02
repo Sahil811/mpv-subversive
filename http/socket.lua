@@ -21,13 +21,30 @@ local SOCKET = {
         ["Accept"] = "application/json"
     },
     err_msg = "Invalid %s request: %s",
-    ssl_params = {
-        mode = "client",
-        protocol = "tlsv1_3",
-        verify = "none",
-        cafile = "/etc/ssl/certs/ca-certificates.crt",
-        options = { "all", "no_sslv2", "no_sslv3", "no_tlsv1" }
-    },
+    ssl_params = (function()
+        local cafile = nil
+        -- On Windows, luasec uses the system certificate store; no cafile needed.
+        -- On Linux/macOS, check common CA bundle paths.
+        if package.config:sub(1, 1) == "/" then
+            local ca_paths = {
+                "/etc/ssl/certs/ca-certificates.crt",
+                "/etc/pki/tls/certs/ca-bundle.crt",
+                "/etc/ssl/cert.pem",
+                "/usr/local/share/certs/ca-root-nss.crt",
+            }
+            for _, path in ipairs(ca_paths) do
+                local f = io.open(path, "r")
+                if f then f:close(); cafile = path; break end
+            end
+        end
+        return {
+            mode = "client",
+            protocol = "tlsv1_3",
+            verify = "peer",
+            cafile = cafile,
+            options = { "all", "no_sslv2", "no_sslv3", "no_tlsv1" }
+        }
+    end)(),
 }
 
 ---@return Scheduler scheduler
@@ -49,15 +66,38 @@ function SOCKET:get_scheduler(host, port)
     return self.schedulers[key]
 end
 
+local _err_response = { data = "", headers = {}, status_code = 0, status_message = "Connection failed" }
+
 ---@return table socket HTTP(S) client socket
+---@return string? err error message if creation failed
 function SOCKET:create_socket(host, port, timeout)
-    local client_socket = assert(socket.tcp(), "Could not create TCP client socket")
-    assert(client_socket:connect(host, port), "Could not connect to host")
+    local client_socket = socket.tcp()
+    if not client_socket then
+        return nil, "Could not create TCP client socket"
+    end
+    local ok, err = client_socket:connect(host, port)
+    if not ok then
+        client_socket:close()
+        return nil, ("Could not connect to host: %s"):format(err or "")
+    end
     if port == 443 then
-        client_socket = assert(ssl.wrap(client_socket, self.ssl_params), "Could not create SSL connection")
+        local wrapped, wrap_err = ssl.wrap(client_socket, self.ssl_params)
+        if not wrapped then
+            client_socket:close()
+            return nil, ("Could not create SSL connection: %s"):format(wrap_err or "")
+        end
+        client_socket = wrapped
         client_socket:sni(host)
-        local ok, msg = client_socket:dohandshake()
-        assert(ok, ("SSL handshake failed: %s"):format(msg or "")) -- or "" is needed to make lua5.1 happy, luajit handles it fine as is
+        local hs_ok, hs_err = pcall(function()
+            local handshake_ok, handshake_msg = client_socket:dohandshake()
+            if not handshake_ok then
+                error(("SSL handshake failed: %s"):format(handshake_msg or ""))
+            end
+        end)
+        if not hs_ok then
+            client_socket:close()
+            return nil, tostring(hs_err)
+        end
     end
     client_socket:settimeout(timeout)
 
@@ -92,12 +132,21 @@ end
 ---@return Response result
 function SOCKET:sync_GET(request)
     request = self:unpack_url(request)
-    local client_socket = self:create_socket(request.host, request.port, nil)
+    local client_socket, sock_err = self:create_socket(request.host, request.port, nil)
+    if not client_socket then
+        return { data = sock_err, headers = {}, status_code = 0, status_message = "Connection failed" }
+    end
     local http_get_body = self:build_request(request, "GET", self.sync_default_headers)
     local send_res, send_err = client_socket:send(http_get_body)
-    assert(send_res, ("Error while sending data to socket: %s"):format(send_err or ""))
+    if not send_res then
+        client_socket:close()
+        return { data = ("Error while sending data to socket: %s"):format(send_err or ""), headers = {}, status_code = 0, status_message = "Send failed" }
+    end
     local recv_res, recv_err = client_socket:receive("*a")
-    assert(recv_res, ("Error while sending data to socket: %s"):format(recv_err or ""))
+    if not recv_res then
+        client_socket:close()
+        return { data = ("Error while receiving data from socket: %s"):format(recv_err or ""), headers = {}, status_code = 0, status_message = "Receive failed" }
+    end
     local response = self:parse_response(recv_res)
     client_socket:close()
     return response
@@ -161,8 +210,29 @@ function SOCKET:async_GET(request)
         end
 
         function response_parser()
+            local content_length = response.headers['content-length']
+            if content_length then
+                content_length = tonumber(content_length)
+            end
+            if not content_length then
+                -- No content-length header; read until connection closes
+                local result, status, partial = routine.thread.sock:receive("*a")
+                if result then
+                    response['data'] = result
+                    parser = nil
+                    return true
+                elseif partial and #partial > 0 then
+                    response['data'] = partial
+                    coroutine.yield(response)
+                    return false
+                else
+                    response['data'] = ""
+                    parser = nil
+                    return true
+                end
+            end
             local already_read = partials['response'] and #partials['response'] or 0
-            local is_done, data = read(response.headers['content-length'] - already_read, 'response')
+            local is_done, data = read(content_length - already_read, 'response')
             -- we pass in incomplete data, the coroutine can return incomplete results so we can tell how much we downloaded so far
             response['data'] = partials['response']
             if is_done then
@@ -192,11 +262,20 @@ end
 ---@return Response result
 function SOCKET:POST(request)
     request = self:unpack_url(request)
-    local client_socket = self:create_socket(request.host, request.port, nil)
+    local client_socket, sock_err = self:create_socket(request.host, request.port, nil)
+    if not client_socket then
+        return { data = sock_err, headers = {}, status_code = 0, status_message = "Connection failed" }
+    end
     local send_res, send_err = client_socket:send(self:build_request(request, "POST", self.sync_default_headers))
-    assert(send_res, ("Error while sending data to socket: %s"):format(send_err or ""))
+    if not send_res then
+        client_socket:close()
+        return { data = ("Error while sending data to socket: %s"):format(send_err or ""), headers = {}, status_code = 0, status_message = "Send failed" }
+    end
     local recv_res, recv_err = client_socket:receive("*a")
-    assert(recv_res, ("Error while sending data to socket: %s"):format(recv_err or ""))
+    if not recv_res then
+        client_socket:close()
+        return { data = ("Error while receiving data from socket: %s"):format(recv_err or ""), headers = {}, status_code = 0, status_message = "Receive failed" }
+    end
     local response = self:parse_response(recv_res)
     client_socket:close()
     return response
