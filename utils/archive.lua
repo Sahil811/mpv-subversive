@@ -128,7 +128,8 @@ function ZIP:extract(args)
     if utils.is_windows() then
         return _7Z.extract(self, args)
     end
-    local cmd = ('unzip -jo %q %s -d %q 2>/dev/null'):format(self.path,
+    -- Use -o (preserve paths) instead of -jo (junk paths) to keep folder structure
+    local cmd = ('unzip -o %q %s -d %q 2>/dev/null'):format(self.path,
         self:build_filter(self:replace_left_brackets(args.filter)), args.target_path or ".")
     return utils.iterate_cmd(cmd)
 end
@@ -145,7 +146,8 @@ end
 function _7Z:extract(args)
     local redirect = utils.is_windows() and "" or " 2>/dev/null"
     local z7_cmd = utils.is_windows() and "7z.exe" or "7z"
-    local cmd = ('%s e -y %q %s -o%q'):format(z7_cmd, self.path, self:build_filter(args.filter), args.target_path or ".") .. redirect
+    -- Use 'x' instead of 'e' to preserve directory structure
+    local cmd = ('%s x -y %q %s -o%q'):format(z7_cmd, self.path, self:build_filter(args.filter), args.target_path or ".") .. redirect
     return utils.iterate_cmd(cmd)
 end
 

@@ -703,11 +703,12 @@ function loader:run(backend)
 
     local dir, fn = mpu.split_path(mp.get_property("path"))
     -- Bug 3/16 fix: normalize-path is not a standard MPV command; use split_path result directly
-    local show_name, episode = backend:parse_current_file(fn)
+    local show_name, episode, season = backend:parse_current_file(fn)
 
     local initial_show_info = {
         parsed_title = show_name,
         ep_number = episode and tonumber(episode),
+        season_number = season and tonumber(season),
     }
 
     -- Bug 5 fix: episode can be nil — use %s/tostring instead of %d
@@ -738,7 +739,7 @@ end
 
 function loader:auto_load(backend, anilist_id)
     local _, fn = mpu.split_path(mp.get_property("path"))
-    local show_name, episode = backend:parse_current_file(fn)
+    local show_name, episode, season = backend:parse_current_file(fn)
 
     if not episode or episode <= 0 then
         print("[mpv-subversive] Cannot auto-load: episode number not detected")
@@ -748,6 +749,7 @@ function loader:auto_load(backend, anilist_id)
     local show_info = {
         parsed_title = show_name,
         ep_number = tonumber(episode),
+        season_number = season and tonumber(season),
         anilist_data = { id = tonumber(anilist_id) }
     }
 

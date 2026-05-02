@@ -105,9 +105,13 @@ local function test_filename_parsing()
     
     local results = {}
     for _, filename in ipairs(test_files) do
-        local title, ep = backend.extract_title_and_number(backend.sanitize(filename))
-        table.insert(results, string.format("  %s\n    → Title: '%s', Episode: %s", 
-            filename, title, ep or "NOT DETECTED"))
+        local title, ep, season = backend.extract_title_and_number(filename)
+        local info = backend.parse_episode_info(filename)
+        local details = string.format("  %s\n    → Title: '%s', Episode: %s, Season: %s%s%s",
+            filename, title, ep or "NOT DETECTED", season or "N/A",
+            info.is_special and (", Special: " .. (info.special_type or "yes")) or "",
+            info.version and (", Version: v" .. info.version) or "")
+        table.insert(results, details)
     end
     
     return "Filename parsing test:\n" .. table.concat(results, "\n")
