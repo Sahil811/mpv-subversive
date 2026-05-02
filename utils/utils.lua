@@ -39,7 +39,7 @@ function utils.get_temporary_path()
         os.remove(tmpname)
         local dirname = tmpname:match("([^/\\]+)$") or ("sub-tmp-" .. os.time())
         local path = string.format("%s\\%s", temp, dirname)
-        os.execute(string.format('mkdir "%s" >nul 2>&1', path))
+        utils.mkdir_p(path)
         return path
     else
         local f = io.popen("mktemp -d")
@@ -88,6 +88,54 @@ function utils.table_to_set(t, in_place)
         t_[v] = i
     end
     return t_
+end
+
+-- Cross-platform directory creation using mp.command_native
+function utils.mkdir_p(path)
+    if not path or #path == 0 then return false end
+    local mp = require 'mp'
+    if utils.is_windows() then
+        local win_path = path:gsub("/", "\\")
+        local result = mp.command_native({
+            name = "subprocess",
+            capture_stdout = true,
+            capture_stderr = true,
+            args = {"cmd", "/C", "mkdir", win_path}
+        })
+        return result and (result.status == 0 or result.status == 1)  -- status 1 = already exists
+    else
+        local result = mp.command_native({
+            name = "subprocess",
+            capture_stdout = true,
+            capture_stderr = true,
+            args = {"mkdir", "-p", path}
+        })
+        return result and result.status == 0
+    end
+end
+
+-- Cross-platform directory removal
+function utils.rmdir(path)
+    if not path or #path == 0 then return false end
+    local mp = require 'mp'
+    if utils.is_windows() then
+        local win_path = path:gsub("/", "\\")
+        local result = mp.command_native({
+            name = "subprocess",
+            capture_stdout = true,
+            capture_stderr = true,
+            args = {"cmd", "/C", "rd", "/S", "/Q", win_path}
+        })
+        return result and result.status == 0
+    else
+        local result = mp.command_native({
+            name = "subprocess",
+            capture_stdout = true,
+            capture_stderr = true,
+            args = {"rm", "-rf", path}
+        })
+        return result and result.status == 0
+    end
 end
 
 function utils.path_exists(path)

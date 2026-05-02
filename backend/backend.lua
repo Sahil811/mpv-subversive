@@ -209,11 +209,7 @@ function backend:extract_archive(file, show_info)
     end
 
     -- Bug 15 fix: cross-platform move using Lua IO instead of os.execute with %q
-    if util.is_windows() then
-        os.execute(string.format('mkdir "%s" >nul 2>&1', cached_path:gsub("/", "\\")))
-    else
-        os.execute(string.format("mkdir -p %q", cached_path))
-    end
+    util.mkdir_p(cached_path)
     -- Copy each file individually using Lua IO for reliability
     for _, f in ipairs(final_files) do
         local src = tmp_path .. '/' .. f
@@ -226,11 +222,7 @@ function backend:extract_archive(file, show_info)
         end)
     end
     -- Clean up temp directory
-    if util.is_windows() then
-        os.execute(string.format('rd /S /Q "%s" >nul 2>&1', tmp_path:gsub("/", "\\")))
-    else
-        os.execute(string.format("rm -rf %q", tmp_path))
-    end
+    util.rmdir(tmp_path)
     return cached_path, files
 end
 

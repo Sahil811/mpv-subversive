@@ -600,6 +600,10 @@ function sub_selector:display()
         self.timer = mp.add_periodic_timer(0.2, self.download_timer)
         self:on_close(function()
             if self.timer then self.timer:kill() end
+            if self.active_retry_timers then
+                for _, t in ipairs(self.active_retry_timers) do t:kill() end
+                self.active_retry_timers = {}
+            end
         end)
     end
 end
@@ -620,7 +624,8 @@ function sub_selector:download(menu_item)
             if not response or response.status_code ~= 200 then
                 if attempt < max_retries then
                     menu_item.display_text = ('[RETRY %d/%d] %s'):format(attempt, max_retries, sub.name)
-                    mp.add_timeout(1.0, do_download)
+                    local retry_timer = mp.add_timeout(1.0, do_download)
+                    table.insert(self.active_retry_timers or {}, retry_timer)
                 else
                     menu_item.display_text = '[FAILED] ' .. sub.name
                     if self.backend.show_notifications then
