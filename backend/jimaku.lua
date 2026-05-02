@@ -52,11 +52,7 @@ function jimaku:query_subtitles(show_info)
     
     local util = require 'utils.utils'
     local cached_path = self:get_cached_path(show_info)
-    if util.is_windows() then
-        os.execute(string.format('mkdir "%s" >nul 2>&1', cached_path:gsub("/", "\\")))
-    else
-        os.execute(string.format("mkdir -p %q", cached_path))
-    end
+    util.mkdir_p(cached_path)
 
     local items = {}
     local total_files = 0
@@ -92,6 +88,35 @@ function jimaku:query_subtitles(show_info)
             end
         else
             print(("Warning: Failed to get files for entry %s: %s"):format(entry.id, file_err or "Unknown error"))
+        end
+    end
+
+    -- Filter by preferred languages if configured
+    if self.preferred_languages and #self.preferred_languages > 0 then
+        local lang_codes = {}
+        for code in self.preferred_languages:gmatch("([^,]+)") do
+            table.insert(lang_codes, code:match("^%s*(.-)%s*$"):lower())
+        end
+        
+        local preferred_items = {}
+        for _, item in ipairs(items) do
+            local name_lower = item.name:lower()
+            for _, code in ipairs(lang_codes) do
+                if name_lower:match("[%.%-%_%s%[]" .. code .. "[%.%-%_%s%]%)]") 
+                   or name_lower:match("^" .. code .. "[%.%-%_%s]") then
+                    table.insert(preferred_items, item)
+                    break
+                end
+            end
+        end
+        
+        -- Only filter if we found some matches; otherwise show everything
+        if #preferred_items > 0 then
+            items = preferred_items
+            total_files = #items
+            if self.show_notifications then
+                mp.osd_message(("Filtered to %d subtitle(s) matching preferred language"):format(total_files), 2)
+            end
         end
     end
     

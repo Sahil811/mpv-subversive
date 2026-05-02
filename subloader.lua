@@ -300,6 +300,16 @@ function sub_selector:init(backend)
 end
 
 function sub_selector:query(show_info)
+    -- Cancel any in-flight downloads/timers from previous query
+    if self.timer then self.timer:kill(); self.timer = nil end
+    if self.archive_timer then self.archive_timer:kill(); self.archive_timer = nil end
+    if self.active_retry_timers then
+        for _, t in ipairs(self.active_retry_timers) do
+            t:kill()
+        end
+    end
+    self.active_retry_timers = {}
+
     print(("[mpv-subversive] sub_selector:query called for show ID: %s, episode: %s"):format(
         show_info.anilist_data and show_info.anilist_data.id or "nil",
         show_info.ep_number or "nil"))
@@ -435,6 +445,7 @@ end
 
 function sub_selector:cache_subtitle(sub)
     self:get_cache().subs[sub.name] = sub.last_modified
+    self:flush_cache()
 end
 
 function sub_selector:cache_archive(archive_entry, files_in_archive)
@@ -444,6 +455,20 @@ function sub_selector:cache_archive(archive_entry, files_in_archive)
         f.matching_episode = nil
     end
     self:get_cache().archives[archive_entry.name] = files_in_archive
+    self:flush_cache()
+end
+
+function sub_selector:flush_cache()
+    if not self.backend or not self.backend.cache or not self.show_info then return end
+    local show_id = self.show_info.anilist_data.id
+    local cache_table = self.backend.cache[show_id]
+    if not cache_table then return end
+    local mpu = require 'mp.utils'
+    local util = require 'utils.utils'
+    local cache_path = self.backend:get_cached_path(self.show_info) .. 'cache.json'
+    util.open_file(cache_path, 'w', function(f)
+        f:write(mpu.format_json(util.copy_table(cache_table)))
+    end)
 end
 
 function sub_selector:select_item(menu_item)
@@ -490,11 +515,7 @@ function sub_selector:choose_item(menu_item)
         end
 
         -- Create directory (cross-platform)
-        if util.is_windows() then
-            os.execute(string.format('mkdir "%s" >nul 2>&1', sub_path:gsub("/", "\\")))
-        else
-            os.execute(("mkdir -p %q"):format(sub_path))
-        end
+        util.mkdir_p(sub_path)
 
         -- Copy subtitle file using Lua IO for cross-platform reliability
         local sub_fn = table.concat({ sub_path, fn:gsub("[^.]+$", ""), util.get_extension(menu_item.subtitle.name) })
@@ -717,6 +738,27 @@ function loader:auto_load(backend, anilist_id)
                     best_match = cached_path
                     break
                 end
+            end
+        end
+    end
+
+    -- Second pass: check archive cache for matching episodes
+    if not best_match then
+        for _, sub in ipairs(queried_subtitles) do
+            if sub.is_archive and sub_selector:is_cached(sub) then
+                local cached_archives = sub_selector:get_cache().archives[sub.name]
+                if cached_archives then
+                    for _, archived_sub in ipairs(cached_archives) do
+                        if backend:is_matching_episode(show_info, archived_sub.name) then
+                            local cached_path = backend:get_cached_path(show_info) .. archived_sub.name
+                            if util.path_exists(cached_path) then
+                                best_match = cached_path
+                                break
+                            end
+                        end
+                    end
+                end
+                if best_match then break end
             end
         end
     end
