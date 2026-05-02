@@ -46,22 +46,21 @@ function backend:is_matching_episode(show_info, filename)
     
     local sanitized_filename = self.sanitize(filename)
     local ep_num = show_info.ep_number
+    local ep_str = tostring(ep_num)
     
-    -- Build patterns. Use episodes count only when it's actually available.
+    -- Build zero-padded variants
     local total_episodes = (show_info.anilist_data and show_info.anilist_data.episodes) or nil
     local pad_width = total_episodes and #tostring(total_episodes) or 2
+    local padded = string.format("%0" .. math.max(pad_width, #ep_str) .. "d", ep_num)
+    
+    -- Patterns with frontier word boundaries (non-digit on each side)
     local patterns = {
-        -- Zero-padded based on total episodes (e.g. 01, 001)
-        string.format("%0" .. pad_width .. "d", ep_num),
-        -- Common patterns: E01, EP01, Episode 01, etc.
-        "[Ee][Pp]?%s*0*" .. ep_num,
-        -- Dash or space followed by number: - 01, -01
-        "[%s%-]0*" .. ep_num,
-        -- Just the number with word boundaries
-        "[^%d]0*" .. ep_num .. "[^%d]",
-        -- At start or end
-        "^0*" .. ep_num .. "[^%d]",
-        "[^%d]0*" .. ep_num .. "$",
+        -- EP/E prefix: E01, EP01, Episode 01
+        "[Ee][Pp]?%s*0*" .. ep_str .. "%f[%D]",
+        -- Number bounded by non-digits: " 01 ", "-01-", etc.
+        "%f[%D]0*" .. ep_str .. "%f[%D]",
+        -- Zero-padded exact: 01, 001
+        "%f[%D]" .. padded .. "%f[%D]",
     }
     
     for _, pattern in ipairs(patterns) do
@@ -252,6 +251,15 @@ function backend.sanitize(text)
         "FLAC", "AAC", "MP3", "DTS", "AC3",
         "[mM]ulti", "[dD]ual",
         "1920x1080", "1280x720", "[0-9]+x[0-9]+",
+        "[Ss]eason%s*%d+",
+        "[Vv]ol%.?%s*%d+",
+        "[Bb]atch",
+        "[Cc]ommentary",
+        "[Nn][Cc][Oo][Pp]",
+        "[Nn][Cc][Ee][Dd]",
+        "[Ss]pecials?",
+        "[Oo][Vv][Aa]",
+        "[Oo][Nn][Aa]",
     }
     local result = text
     for _, sub_pattern in ipairs(sub_patterns) do
@@ -271,7 +279,7 @@ function backend.extract_title_and_number(text)
     local matchers = Sequence {
         Regex("^([%a%s%p]+)[%s]+(%d+)$", "\1\2"),  -- "Title 077" at end
         Regex("^([%a%s%p]+)[%s]+(%d+)[%s]+", "\1\2"),  -- "Title 077 " with trailing space
-        Regex("^([%a%s%p%d]+)[Ss][%d]+[Ee]?([%d]+)", "\1\2"),  -- S01E05
+        Regex("^([%a%s%p%d]+)[Ss]%d+[%s]*[Ee](%d+)", "\1\2"),  -- S01E05 — capture only episode
         Regex("^([%a%s%p%d]+)%-[%s]-([%d]+)[%s%p]*[^%a]*", "\1\2"),  -- Title - 05
         Regex("^([%a%s%p%d]+)[Ee][Pp]?[%s]*(%d+)", "\1\2"),  -- EP05 or E05
         Regex("^([%d]+)[%s]*(.+)$", "\2\1")  -- 05 Title (reversed)
