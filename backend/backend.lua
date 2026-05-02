@@ -152,6 +152,10 @@ function backend:extract_archive(file, show_info)
     local function extract_inner_archive(path_to_archive)
         print(string.format("Looking for archive files in: %q", path_to_archive))
         local parser = archive:new(path_to_archive)
+        if not parser then
+            print(("[mpv-subversive] Skipping invalid archive: %s"):format(path_to_archive))
+            return
+        end
         if not parser:check_valid() then
             print(string.format("Archive was invalid! skipping..\n"))
             return
@@ -181,7 +185,7 @@ function backend:extract_archive(file, show_info)
         local full_path = tmp_path .. '/' .. f
         if self:is_supported_archive(f) then
             local parser = archive:new(full_path)
-            if parser:check_valid() then
+            if parser and parser:check_valid() then
                 for sub_f in parser:list_files {} do
                     print(("Listing file from %s: %s"):format(full_path, sub_f))
                     parser:extract { filter = { sub_f }, target_path = tmp_path }

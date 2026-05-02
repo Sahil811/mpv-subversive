@@ -25,24 +25,27 @@ function offline:query_subtitles(show_info)
                     -- relative path — prepend mapping_dir
                     path = mapping_dir .. path
                 end
-                assert(utils.path_exists(path), ("Path in mapping was invalid: '%s'"):format(path))
-                -- Cross-platform directory listing using mp.utils.readdir
-                local files = mpu.readdir(path, "files") or {}
-                for _, file in ipairs(files) do
-                    if self:is_supported_archive(file) then
-                        local _, files_in_archive = self:extract_archive(path .. '/' .. file, show_info)
-                        for _, ff in ipairs(files_in_archive) do
-                            ff.last_modified = 1
-                            table.insert(subtitles, ff)
+                if not utils.path_exists(path) then
+                    print(("[mpv-subversive] Warning: Path in mapping was invalid, skipping: '%s'"):format(path))
+                else
+                    -- Cross-platform directory listing using mp.utils.readdir
+                    local files = mpu.readdir(path, "files") or {}
+                    for _, file in ipairs(files) do
+                        if self:is_supported_archive(file) then
+                            local _, files_in_archive = self:extract_archive(path .. '/' .. file, show_info)
+                            for _, ff in ipairs(files_in_archive) do
+                                ff.last_modified = 1
+                                table.insert(subtitles, ff)
+                            end
+                        else
+                            table.insert(subtitles, {
+                                name = file,
+                                matching_episode = self:is_matching_episode(show_info, file),
+                                absolute_path = path .. '/' .. file,
+                                is_downloaded = true,
+                                last_modified = 1
+                            })
                         end
-                    else
-                        table.insert(subtitles, {
-                            name = file,
-                            matching_episode = self:is_matching_episode(show_info, file),
-                            absolute_path = path .. '/' .. file,
-                            is_downloaded = true,
-                            last_modified = 1
-                        })
                     end
                 end
             end

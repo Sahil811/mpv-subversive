@@ -24,7 +24,10 @@ end
 
 -- Bug 26 fix: create a proper instance, not modifying the class table
 function archive:new(file_path)
-    assert(utils.path_exists(file_path), string.format("INVALID PATH '%q'!", file_path))
+    if not utils.path_exists(file_path) then
+        print(("[mpv-subversive] Warning: Archive path does not exist: %s"):format(file_path))
+        return nil, ("Archive path does not exist: %s"):format(file_path)
+    end
     local ext = utils.get_extension(file_path) or ""
     local path = file_path
     local instance = { ext = ext, path = path }
